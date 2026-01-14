@@ -1,12 +1,28 @@
 // ==UserScript==
-// @name         104 VIP Resume Bunny Copy Button (Auto Avoid Down)
+// @name         104 VIP Resume Bunny Copy Button
 // @namespace    https://vip.104.com.tw/
 // @version      1.7.1
-// @description  Bunny-only button (no ring/circle), status text on bunny, copies Name/Email/Mobile/ResumeCode, auto avoid overlap (down)
+// @description  Internal productivity tool for extracting resume contact information on 104 VIP pages
 // @match        https://vip.104.com.tw/search/SearchResumeMaster*
 // @match        https://vip.104.com.tw/apply/ApplyResume?*
 // @grant        GM_setClipboard
 // @run-at       document-idle
+//
+// ─────────────────────────────────────────────────────────────
+//  Copyright © 2026 Hung Yang Tech.
+//  All rights reserved.
+//
+//  Developed by: Hung Yang Tech HR – Eric Jiang
+//
+//  This script is proprietary software developed for internal
+//  use only. Unauthorized copying, modification, distribution,
+//  reverse engineering, or commercial use of this script,
+//  in whole or in part, is strictly prohibited.
+//
+//  Any reproduction or redistribution without explicit written
+//  permission from Hung Yang Tech will be subject to legal action.
+//
+// ─────────────────────────────────────────────────────────────
 // ==/UserScript==
 
 (() => {
