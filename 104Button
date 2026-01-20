@@ -1,28 +1,12 @@
 // ==UserScript==
 // @name         104 VIP Resume Bunny Copy Button
 // @namespace    https://vip.104.com.tw/
-// @version      1.7.1
+// @version      1.7.4
 // @description  Internal productivity tool for extracting resume contact information on 104 VIP pages
 // @match        https://vip.104.com.tw/search/SearchResumeMaster*
 // @match        https://vip.104.com.tw/apply/ApplyResume?*
 // @grant        GM_setClipboard
 // @run-at       document-idle
-//
-// ─────────────────────────────────────────────────────────────
-//  Copyright © 2026 Hung Yang Tech.
-//  All rights reserved.
-//
-//  Developed by: Hung Yang Tech HR – Eric Jiang
-//
-//  This script is proprietary software developed for internal
-//  use only. Unauthorized copying, modification, distribution,
-//  reverse engineering, or commercial use of this script,
-//  in whole or in part, is strictly prohibited.
-//
-//  Any reproduction or redistribution without explicit written
-//  permission from Hung Yang Tech will be subject to legal action.
-//
-// ─────────────────────────────────────────────────────────────
 // ==/UserScript==
 
 (() => {
@@ -39,33 +23,30 @@
     btnTextDone: '已複製 ✅',
     resetToIdleAfterMs: 2000,
 
-    // 更靠右下角（預設貼邊距離）
     edgeRightPx: 6,
     edgeBottomPx: 6,
 
-    // ✅ 避讓時往「下」移多少（避免跟 104 右下角浮動客服重疊）
     avoidShiftDownPx: 86,
-
-    // 右下角掃描區域（越小越不會誤判）
     scanRightZonePx: 200,
     scanBottomZonePx: 240,
+
+    closeTimeoutMs: 2500,
   };
 
-  /**********************
-   * Bunny Icon URL (RAW)
-   **********************/
   const BUNNY_ICON_URL =
     "https://raw.githubusercontent.com/HyEricJiang/104Icon/main/rabbit_icon_256.png";
 
   /**********************
-   * Selectors (your provided)
+   * Selectors
+   * - 保留你原本的長 selector（Apply 可用）
+   * - 但 modal 的抓法改成「特徵掃描」（Search/Apply 都吃得到）
    **********************/
   const SEL = {
+    // 你原本提供的（Apply 很準）
     name:  '#app > div:nth-child(1) > div:nth-child(3) > main > div.modal.contact-information-modal.modal-centered > div.modal-dialog.modal-dialog--md > div > div.modal-body > div > div > div:nth-child(1) > div',
     email: '#app > div:nth-child(1) > div:nth-child(3) > main > div.modal.contact-information-modal.modal-centered > div.modal-dialog.modal-dialog--md > div > div.modal-body > div > div > div:nth-child(2) > div.col-10 > a',
     phone: '#app > div:nth-child(1) > div:nth-child(3) > main > div.modal.contact-information-modal.modal-centered > div.modal-dialog.modal-dialog--md > div > div.modal-body > div > div > div:nth-child(3) > div.col-10 > div > a',
 
-    modalRoot: 'div.modal.contact-information-modal',
     resumeCodeSpans: 'span.copy-content',
     contactBtnIcon: 'i.vip-icon-contact',
   };
@@ -184,7 +165,7 @@
     `;
 
     btnEl.appendChild(statusEl);
-    btnEl.addEventListener('click', runCopy, { passive: true });
+    btnEl.addEventListener('click', runCopy);
     document.documentElement.appendChild(btnEl);
 
     setTimeout(autoAvoidOverlap, 600);
@@ -222,11 +203,9 @@
     const bunny = document.getElementById('__bunnyCopyBtn');
     if (!bunny) return;
 
-    // 先貼邊
     bunny.style.right = `${CFG.edgeRightPx}px`;
     bunny.style.bottom = `${CFG.edgeBottomPx}px`;
 
-    // 取得貼邊後位置
     const bunnyRect = bunny.getBoundingClientRect();
 
     const candidates = Array.from(document.querySelectorAll('body *')).filter(el => {
@@ -243,20 +222,11 @@
       return inRightZone && inBottomZone;
     });
 
-    // 有重疊就往下避讓（但要避免超出螢幕）
     for (const el of candidates) {
       const r = el.getBoundingClientRect();
       if (rectOverlap(bunnyRect, r)) {
-        const bunnyH = bunnyRect.height || 84;
-
-        // 計算新的 bottom：貼邊 + 下移
         let newBottom = CFG.edgeBottomPx - CFG.avoidShiftDownPx;
-
-        // bottom 是 CSS 的距離底部；要「往下」其實是把 bottom 變小甚至變負
-        // 但我們不要跑出螢幕，所以限制最小值：
-        // 允許最多貼到螢幕下緣 0px（不出界）
         newBottom = Math.max(0, newBottom);
-
         bunny.style.bottom = `${newBottom}px`;
         break;
       }
@@ -280,98 +250,241 @@
   }
 
   function findContactButton() {
+    // ✅ Search/Apply 可能是 button 或 a
     const icon = document.querySelector(SEL.contactBtnIcon);
     if (icon) {
-      const btn = icon.closest('button');
-      if (btn) return btn;
+      const clickable = icon.closest('button,a,[role="button"]');
+      if (clickable) return clickable;
     }
-    const buttons = Array.from(document.querySelectorAll('button'));
+    const buttons = Array.from(document.querySelectorAll('button,a,[role="button"]'));
     return buttons.find(b => /聯繫方式/.test(textOf(b))) || null;
   }
 
-  function readName() {
-    return textOf(document.querySelector(SEL.name));
-  }
-
-  function readEmail() {
-    const el = document.querySelector(SEL.email);
-    const href = attrOf(el, 'href');
-    const fromHref = href.replace(/^mailto:/i, '').trim();
-    return fromHref || textOf(el);
-  }
-
-  function readPhone() {
-    const el = document.querySelector(SEL.phone);
-    const href = attrOf(el, 'href');
-    const fromHref = href.replace(/^tel:/i, '').trim();
-    return fromHref || textOf(el);
-  }
-
   /**********************
-   * Close modal (robust)
+   * Modal helpers (Search/Apply unify)
    **********************/
+  function isVisible(el) {
+    if (!el) return false;
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || Number(s.opacity || '1') === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 10 && r.height > 10;
+  }
+
+  function modalSignatureOk(modalRoot) {
+    if (!modalRoot) return false;
+
+    // 必須可見
+    if (!isVisible(modalRoot)) return false;
+
+    // 特徵：有 close（vip-icon-close 或 button.close/aria-label Close）
+    const hasClose =
+      !!modalRoot.querySelector('button.close,button[aria-label="Close"],i.vip-icon-close');
+
+    // 特徵：標題包含「聯繫方式」
+    const titleText = textOf(
+      modalRoot.querySelector('.modal-header .modal-title, h2.modal-title, [class*="modal-title"], #Label')
+    );
+    const hasTitle = /聯繫方式/.test(titleText);
+
+    // 特徵：內容含 mailto / tel（至少一個）
+    const hasContactLink =
+      !!modalRoot.querySelector('a[href^="mailto:"]') || !!modalRoot.querySelector('a[href^="tel:"]');
+
+    return (hasClose && hasTitle) || (hasClose && hasContactLink);
+  }
+
+  function getVisibleContactModalRoot() {
+    // ✅ 不再綁死 contact-information-modal，改掃描常見 modal 容器
+    const candidates = Array.from(document.querySelectorAll('div.modal, div[role="dialog"], dialog'));
+    const hits = candidates.filter(modalSignatureOk);
+    if (!hits.length) return null;
+
+    // 取 z-index 最大者
+    hits.sort((a, b) => {
+      const za = Number(getComputedStyle(a).zIndex || 0);
+      const zb = Number(getComputedStyle(b).zIndex || 0);
+      return zb - za;
+    });
+    return hits[0];
+  }
+
+  function getVisibleDialog(modalRoot) {
+    const root = modalRoot || getVisibleContactModalRoot();
+    if (!root) return null;
+    const dlg =
+      root.querySelector('div.modal-dialog') ||
+      root.querySelector('.modal-dialog') ||
+      root;
+    return isVisible(dlg) ? dlg : null;
+  }
+
+  function dispatchMouseClick(el, clientX, clientY) {
+    if (!el) return false;
+    try {
+      ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
+        el.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX,
+          clientY,
+        }));
+      });
+      return true;
+    } catch {
+      try { el.click(); return true; } catch { return false; }
+    }
+  }
+
   function pressEsc() {
     document.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true
     }));
   }
 
-  function tryClick(el) {
-    if (!el) return false;
-    try { el.click(); return true; } catch { return false; }
+  function modalIsGone() {
+    const root = getVisibleContactModalRoot();
+    if (root && isVisible(root)) return false;
+
+    const bd = document.querySelector('.modal-backdrop.show') || document.querySelector('.modal-backdrop');
+    if (bd && isVisible(bd)) return false;
+
+    return true;
   }
 
-  function findCloseCandidateInModal(modal) {
-    if (!modal) return null;
+  /**********************
+   * Read contact info
+   **********************/
+  function readName() {
+    // 1) 先用你原本 selector
+    const v1 = textOf(document.querySelector(SEL.name));
+    if (v1) return v1;
 
-    const q1 = modal.querySelector(
-      'button[aria-label*="關閉"],button[aria-label*="Close"],button[title*="關閉"],button[title*="Close"],button[data-dismiss],button[data-bs-dismiss],button.close'
-    );
-    if (q1) return q1;
+    // 2) fallback：從 modal 內找
+    const root = getVisibleContactModalRoot();
+    if (!root) return '';
 
-    const candidates = Array.from(modal.querySelectorAll('button,a,div,i,span'));
-    const byText = candidates.find(el => {
-      const t = textOf(el);
-      return t === '×' || t === '✕' || t === 'X';
-    });
-    if (byText) return byText.closest('button,a,div') || byText;
+    // 常見：姓名是第一行粗體
+    const nameEl =
+      root.querySelector('.information--content .col.t3.font-weight-bold') ||
+      root.querySelector('.information--content .t3.font-weight-bold') ||
+      root.querySelector('.modal-body .t3.font-weight-bold') ||
+      root.querySelector('.modal-body .font-weight-bold');
 
-    const byClass = candidates.find(el => /\b(close|modal-close|btn-close|icon-close)\b/i.test(el.className || ''));
-    if (byClass) return byClass.closest('button,a,div') || byClass;
+    // 但 font-weight-bold 可能很多，所以再做一點過濾：避免抓到 E-mail/電話標題
+    const nameText = textOf(nameEl);
+    if (nameText && !/E-mail|聯絡電話|手機|住家|聯繫方式/i.test(nameText)) return nameText;
 
-    return null;
+    // 最後 fallback：找 modal-body 內第一個看起來像姓名的短字串
+    const body = root.querySelector('.modal-body') || root;
+    const maybe = Array.from(body.querySelectorAll('div,span'))
+      .map(textOf)
+      .filter(t => t && t.length <= 6 && !/E-mail|電話|手機|住家|視訊/i.test(t))[0];
+    return maybe || '';
   }
 
-  function clickCloseByCoordinate(modal) {
-    if (!modal) return false;
-    const rect = modal.getBoundingClientRect();
-    const x = Math.min(window.innerWidth - 2, rect.right - 14);
-    const y = Math.max(2, rect.top + 14);
+  function readEmail() {
+    const el1 = document.querySelector(SEL.email);
+    const href1 = attrOf(el1, 'href');
+    const fromHref1 = href1.replace(/^mailto:/i, '').trim();
+    if (fromHref1) return fromHref1;
+    const txt1 = textOf(el1);
+    if (txt1) return txt1;
 
-    const target = document.elementFromPoint(x, y);
-    if (!target) return false;
-    const clickable = target.closest('button,a,div') || target;
-
-    try {
-      ['mousedown', 'mouseup', 'click'].forEach(type => {
-        clickable.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y }));
-      });
-      return true;
-    } catch {
-      return false;
-    }
+    const root = getVisibleContactModalRoot();
+    if (!root) return '';
+    const el = root.querySelector('a[href^="mailto:"]');
+    const href = attrOf(el, 'href').replace(/^mailto:/i, '').trim();
+    return href || textOf(el);
   }
 
+  function readPhone() {
+    const el1 = document.querySelector(SEL.phone);
+    const href1 = attrOf(el1, 'href');
+    const fromHref1 = href1.replace(/^tel:/i, '').trim();
+    if (fromHref1) return fromHref1;
+    const txt1 = textOf(el1);
+    if (txt1) return txt1;
+
+    const root = getVisibleContactModalRoot();
+    if (!root) return '';
+    const el = root.querySelector('a[href^="tel:"]');
+    const href = attrOf(el, 'href').replace(/^tel:/i, '').trim();
+    return href || textOf(el);
+  }
+
+  /**********************
+   * ✅ Close modal (Search/Apply)
+   * - 點 button.close
+   * - 點右上角座標
+   * - 點 backdrop
+   * - ESC
+   * - 最後保底硬清
+   **********************/
   async function closeModalRobust() {
-    const modal = document.querySelector(SEL.modalRoot);
-    if (!modal) return;
+    const root = getVisibleContactModalRoot();
+    const dialog = getVisibleDialog(root);
+    if (!root || !dialog) return;
 
-    const cand = findCloseCandidateInModal(modal);
-    if (tryClick(cand)) return;
+    if (modalIsGone()) return;
 
-    if (clickCloseByCoordinate(modal)) return;
+    // 1) 點 button.close（最準）
+    const closeBtn =
+      dialog.querySelector('button.close[aria-label="Close"]') ||
+      dialog.querySelector('button.close') ||
+      dialog.querySelector('button[aria-label="Close"]') ||
+      dialog.querySelector('i.vip-icon-close')?.closest('button') ||
+      null;
 
+    if (closeBtn) {
+      const r = closeBtn.getBoundingClientRect();
+      dispatchMouseClick(closeBtn, r.left + r.width / 2, r.top + r.height / 2);
+      const ok = await waitForFn(() => modalIsGone(), CFG.closeTimeoutMs);
+      if (ok) return;
+    }
+
+    // 2) 點右上角座標（你要的）
+    {
+      const dr = dialog.getBoundingClientRect();
+      const x = Math.min(window.innerWidth - 2, dr.right - 10);
+      const y = Math.max(2, dr.top + 10);
+
+      const topEl = document.elementFromPoint(x, y);
+      if (topEl) {
+        const clickable = topEl.closest('button,a,i,div,span,[role="button"]') || topEl;
+        dispatchMouseClick(clickable, x, y);
+        const ok = await waitForFn(() => modalIsGone(), CFG.closeTimeoutMs);
+        if (ok) return;
+      }
+    }
+
+    // 3) 點 backdrop
+    {
+      const bd = document.querySelector('.modal-backdrop.show') || document.querySelector('.modal-backdrop');
+      if (bd && isVisible(bd)) {
+        const br = bd.getBoundingClientRect();
+        dispatchMouseClick(bd, br.left + 10, br.top + 10);
+        const ok = await waitForFn(() => modalIsGone(), CFG.closeTimeoutMs);
+        if (ok) return;
+      }
+    }
+
+    // 4) ESC
     pressEsc();
+    await waitForFn(() => modalIsGone(), CFG.closeTimeoutMs);
+
+    // 5) 保底硬清（只在卡死）
+    if (!modalIsGone()) {
+      try {
+        root.style.display = 'none';
+        root.style.visibility = 'hidden';
+        root.style.pointerEvents = 'none';
+        document.body.style.overflow = '';
+        const bd = document.querySelector('.modal-backdrop.show') || document.querySelector('.modal-backdrop');
+        bd?.remove?.();
+      } catch {}
+    }
   }
 
   /**********************
@@ -398,8 +511,17 @@
       setStatus('開啟聯繫方式…');
       contactBtn.click();
 
+      // ✅ Search/Apply 都用「特徵 modal」去等
       const ready = await waitForFn(() => {
-        return document.querySelector(SEL.name) || document.querySelector(SEL.email) || document.querySelector(SEL.phone);
+        const root = getVisibleContactModalRoot();
+        if (!root) return false;
+
+        const emailEl = root.querySelector('a[href^="mailto:"]');
+        const phoneEl = root.querySelector('a[href^="tel:"]');
+
+        const okEmail = !!emailEl && (attrOf(emailEl, 'href').startsWith('mailto:') || textOf(emailEl));
+        const okPhone = !!phoneEl && (attrOf(phoneEl, 'href').startsWith('tel:') || textOf(phoneEl));
+        return okEmail && okPhone;
       });
 
       if (!ready) {
@@ -416,7 +538,6 @@
       setStatus('關閉視窗…');
       await closeModalRobust();
 
-      // Copy order: 姓名 > 信箱 > 手機 > 履歷代碼
       copyTSV([name, email, phone, resumeCode]);
 
       setStatus(CFG.btnTextDone);
