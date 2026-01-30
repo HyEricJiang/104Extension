@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         104 VIP Resume Bunny Copy Button
 // @namespace    https://vip.104.com.tw/
-// @version      1.7.4
+// @version      1.7.5
 // @description  Internal productivity tool for extracting resume contact information on 104 VIP pages
 // @match        https://vip.104.com.tw/search/SearchResumeMaster*
 // @match        https://vip.104.com.tw/apply/ApplyResume?*
+// @match        https://vip.104.com.tw/apply/applyResume?*
 // @grant        GM_setClipboard
 // @run-at       document-idle
 // ==/UserScript==
