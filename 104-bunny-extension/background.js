@@ -1,5 +1,77 @@
 const STORE_KEY = "bunny_rows";
 
+/** =========================
+ *  Badge 狀態機
+ *  ========================= */
+const BADGE = {
+  IDLE_TEXT: "COPY",
+  IDLE_COLOR: "#1a73e8",
+
+  RUNNING_COLOR: "#1a73e8",
+
+  OK_TEXT: "OK",
+  OK_COLOR: "#34a853",
+
+  ERR_TEXT: "ERR",
+  ERR_COLOR: "#d93025",
+
+  RESET_AFTER_MS: 4500
+};
+
+let badgeState = {
+  running: false,
+  current: 0,
+  total: 0,
+  lastTitle: "COPY"
+};
+
+function setBadge(text, color, title) {
+  chrome.action.setBadgeText({ text: text || "" });
+  if (color) chrome.action.setBadgeBackgroundColor({ color });
+  if (title) chrome.action.setTitle({ title });
+  if (title) badgeState.lastTitle = title;
+}
+
+function setIdle(title = "COPY") {
+  badgeState.running = false;
+  setBadge(BADGE.IDLE_TEXT, BADGE.IDLE_COLOR, title);
+}
+
+function progressBadgeText(current, total) {
+  const t = `${current}/${total}`;
+  return t.length <= 4 ? t : String(current);
+}
+
+function setRunningProgress(current, total, title) {
+  badgeState.running = true;
+  badgeState.current = current;
+  badgeState.total = total;
+  setBadge(progressBadgeText(current, total), BADGE.RUNNING_COLOR, title || `收集中：${current}/${total}`);
+}
+
+function setOkThenReset(title = "完成") {
+  badgeState.running = false;
+  setBadge(BADGE.OK_TEXT, BADGE.OK_COLOR, title);
+  setTimeout(() => {
+    if (!badgeState.running) setIdle("COPY");
+  }, BADGE.RESET_AFTER_MS);
+}
+
+function setErrThenReset(title = "錯誤") {
+  badgeState.running = false;
+  setBadge(BADGE.ERR_TEXT, BADGE.ERR_COLOR, title);
+  setTimeout(() => {
+    if (!badgeState.running) setIdle("COPY");
+  }, BADGE.RESET_AFTER_MS);
+}
+
+// ⬅️ 重要：確保 service worker 啟動 / 重載時就是 COPY
+chrome.runtime.onInstalled.addListener(() => setIdle("COPY"));
+setIdle("COPY");
+
+/** =========================
+ *  原本的邏輯（未改動核心流程）
+ *  ========================= */
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -14,7 +86,6 @@ async function setRows(rows) {
 }
 
 function getResumeCodeFromLine(line) {
-  // line = name \t email \t phone \t resumeCode
   const parts = String(line || "").split("\t");
   return parts[3] || "";
 }
@@ -33,38 +104,32 @@ async function addLineDedup(line) {
 }
 
 async function sendToPopup(msg) {
-  // Send to any open popup (best-effort)
   try {
     await chrome.runtime.sendMessage(msg);
   } catch {}
 }
 
 async function collectFromTab(tabId) {
-  // Inject content extractor into that tab
-  const [{ result }] = await chrome.scripting.executeScript({
+  await chrome.scripting.executeScript({
     target: { tabId },
     files: ["content.js"]
   });
 
-  // content.js registers a global function; then execute it
   const [{ result: data }] = await chrome.scripting.executeScript({
     target: { tabId },
     func: async () => {
-      // @ts-ignore
       if (typeof window.__bunnyExtractOne !== "function") {
         throw new Error("__bunnyExtractOne not found");
       }
-      // @ts-ignore
       return await window.__bunnyExtractOne();
     }
   });
 
-  return data; // { ok, line, resumeCode, error? }
+  return data;
 }
 
 async function activateTab(tabId) {
   await chrome.tabs.update(tabId, { active: true });
-  // give page a bit time to become active
   await sleep(350);
 }
 
@@ -79,82 +144,67 @@ async function startCollectRight() {
   const allTabs = await chrome.tabs.query({ currentWindow: true });
   const startIndex = activeTab.index;
 
-  // Only tabs to the right (including current)
   const targets = allTabs
     .filter(t => t.index >= startIndex && is104Url(t.url))
     .sort((a, b) => a.index - b.index);
 
   if (!targets.length) {
     await sendToPopup({ type: "ERROR", error: "右側找不到任何 104 VIP 分頁" });
+    setErrThenReset("右側找不到 104 分頁");
     return;
   }
 
-  let total = targets.length;
+  const total = targets.length;
 
   for (let i = 0; i < targets.length; i++) {
     const t = targets[i];
     if (!t.id) continue;
 
+    setRunningProgress(i + 1, total, `收集中：${i + 1}/${total}`);
     await activateTab(t.id);
-
-    await sendToPopup({
-      type: "PROGRESS",
-      message: `處理分頁：${t.title || t.url || ""}`,
-      current: i + 1,
-      total,
-      count: (await getRows()).length
-    });
 
     let data;
     try {
       data = await collectFromTab(t.id);
     } catch (e) {
-      await sendToPopup({
-        type: "PROGRESS",
-        message: `跳過（腳本執行失敗）：${t.title || ""}`,
-        current: i + 1,
-        total,
-        count: (await getRows()).length
-      });
       continue;
     }
 
     if (data?.ok && data?.line) {
-      const r = await addLineDedup(data.line);
-      await sendToPopup({
-        type: "PROGRESS",
-        message: r.added ? `已收集 ✅ ${data.resumeCode || ""}` : `已存在略過 ↩ ${data.resumeCode || ""}`,
-        current: i + 1,
-        total,
-        count: r.count
-      });
-    } else {
-      await sendToPopup({
-        type: "PROGRESS",
-        message: `抓取失敗：${data?.error || "unknown"}`,
-        current: i + 1,
-        total,
-        count: (await getRows()).length
-      });
+      await addLineDedup(data.line);
     }
 
-    // small delay between tabs
     await sleep(450);
   }
 
   const rows = await getRows();
   await sendToPopup({ type: "DONE", count: rows.length });
+  setOkThenReset(`完成：共收集 ${rows.length} 筆`);
 }
 
+/** =========================
+ *  Message router
+ *  ========================= */
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
+
+    // ✅ popup 打開時，強制顯示 COPY
+    if (msg?.type === "INIT_BADGE_COPY") {
+      setIdle("COPY");
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (msg?.type === "START_COLLECT_RIGHT") {
       try {
+        setIdle("COPY");
         await startCollectRight();
         sendResponse({ ok: true });
       } catch (e) {
-        await sendToPopup({ type: "ERROR", error: String(e?.message || e) });
-        sendResponse({ ok: false, error: String(e?.message || e) });
+        const errMsg = String(e?.message || e);
+        await sendToPopup({ type: "ERROR", error: errMsg });
+        setErrThenReset(`錯誤：${errMsg}`);
+        sendResponse({ ok: false, error: errMsg });
       }
       return;
     }

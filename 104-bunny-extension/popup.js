@@ -91,4 +91,11 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+// ⬅️ 新增：popup 打開時，初始化 badge 為 COPY
+document.addEventListener("DOMContentLoaded", async () => {
+  try {
+    await chrome.runtime.sendMessage({ type: "INIT_BADGE_COPY" });
+  } catch {}
+});
+
 refreshCount();

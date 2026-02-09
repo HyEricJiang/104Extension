@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>104 PDF Exporter</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "PingFang TC", "Noto Sans TC", Arial; margin: 12px; width: 320px; }
+    .row { margin: 10px 0; }
+    .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { padding: 8px 10px; border: 1px solid #ddd; border-radius: 10px; background: #fff; cursor: pointer; }
+    button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+    button.danger { background: #d93025; color: #fff; border-color: #d93025; }
+    input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 10px; }
+    label { font-size: 12px; color: #444; display: block; margin-bottom: 6px; }
+    .hint { font-size: 12px; color: #666; line-height: 1.4; }
+    .status { font-size: 12px; background: #f6f8fa; padding: 8px; border-radius: 10px; white-space: pre-wrap; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <div class="btns">
+      <button id="start" class="primary">Start</button>
+      <button id="pause">Pause</button>
+      <button id="resume">Resume</button>
+      <button id="stop" class="danger">Stop</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <label>下載子資料夾（相對於 Chrome 預設下載資料夾）</label>
+    <input id="subdir" placeholder="例如：104履歷下載區/" />
+    <div class="hint">不填 = 直接存到預設下載資料夾。支援子路徑：招募/104履歷下載區/</div>
+  </div>
+
+  <div class="row grid">
+    <div>
+      <label>首份等待（ms）</label>
+      <input id="firstWait" type="number" min="0" />
+    </div>
+    <div>
+      <label>後續等待（ms）</label>
+      <input id="nextWait" type="number" min="0" />
+    </div>
+  </div>
+
+  <div class="row">
+    <label><input id="waitDownload" type="checkbox" /> 每份等待下載完成（較慢但更穩）</label>
+  </div>
+
+  <div class="row">
+    <button id="save">儲存設定</button>
+  </div>
+
+  <div class="row">
+    <label>狀態</label>
+    <div id="status" class="status">讀取中…</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
