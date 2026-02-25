@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "104 VIP Resume PDF Exporter (Control)",
-  "version": "1.4.2",
-  "description": "Export 104 VIP resumes to PDF: one-click from current resume page (search/document/preview) and batch to the right until the first non-resume page. Supports custom filename prefix/suffix.",
+  "version": "1.4.5",
+  "description": "Worker-tab safe mode: build 104 resumePreview URL from idno/ec, extract name ONLY from preview page, set title to prefix_name_suffix, then trigger window.print().",
   "action": {
     "default_title": "104 PDF Exporter",
     "default_popup": "popup.html"
@@ -10,10 +10,11 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["tabs", "scripting", "downloads", "debugger", "storage"],
+  "permissions": ["tabs", "scripting", "downloads", "storage"],
   "host_permissions": [
     "https://vip.104.com.tw/ResumeTools/resumePreview?*",
     "https://vip.104.com.tw/search/*",
-    "https://vip.104.com.tw/document/*"
+    "https://vip.104.com.tw/document/*",
+    "https://vip.104.com.tw/apply/*"
   ]
 }

@@ -8,14 +8,12 @@
      - 原始頁： https://vip.104.com.tw/search/searchResumeMaster?idno=...
      - 文件頁： https://vip.104.com.tw/document/master?sn=...
      - 預覽頁： https://vip.104.com.tw/ResumeTools/resumePreview?...
-     - 主動投遞/應徵頁： https://vip.104.com.tw/apply/ApplyResume
    - 會自動：開「背景」預覽頁 → 匯出 PDF → 下載 → 關閉背景頁
 
 3. ✅ 新模式（往右批次）：
    - 把多個履歷頁（原始頁/預覽頁）依序排在同一個 Chrome 視窗，且「目前分頁」停在第一份
    - 按擴充套件 →「往右批次下載」
    - 會從目前分頁開始，一直往右處理，直到遇到第一個「非 104 履歷頁」就停止
-   - 也支援把「主動投遞/應徵頁」混在中間（會嘗試從頁面中解析出真正的履歷網址）
 
 4. 備註：
    - 往右批次會同時支援大小寫不同的履歷路徑，例如：
