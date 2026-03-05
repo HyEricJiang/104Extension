@@ -31,7 +31,7 @@ async function loadSettings() {
 async function refreshStatus() {
   const st = await send("getStatus");
   $("status").textContent =
-    `running: ${st.running}\nprogress: ${st.progressText}\ncurrent: ${st.currentIndex}/${st.total}\nlast: ${st.lastMessage}`;
+    `running: ${st.running}\nstopRequested: ${!!st.stopRequested}\nprogress: ${st.progressText}\ncurrent: ${st.currentIndex}/${st.total}\nlast: ${st.lastMessage}`;
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -52,6 +52,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("downloadRight").addEventListener("click", async () => {
     await saveSettingsSilently();
     await send("downloadRight");
+    await refreshStatus();
+  });
+
+  $("stop").addEventListener("click", async () => {
+    await send("stop");
     await refreshStatus();
   });
 

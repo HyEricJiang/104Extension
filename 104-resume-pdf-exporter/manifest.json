@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "104 VIP Resume PDF Exporter (Control)",
-  "version": "1.4.5",
-  "description": "Worker-tab safe mode: build 104 resumePreview URL from idno/ec, extract name ONLY from preview page, set title to prefix_name_suffix, then trigger window.print().",
+  "version": "1.5.3",
+  "description": "Worker-tab safe mode: build 104 resumePreview URL from idno/ec, smart-wait for preview fully rendered, extract name ONLY from preview page, set title to prefix_name_suffix, then trigger window.print(). (ApplyResume: use sn+ec)",
   "action": {
     "default_title": "104 PDF Exporter",
     "default_popup": "popup.html"
@@ -10,7 +10,12 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["tabs", "scripting", "downloads", "storage"],
+  "permissions": [
+    "tabs",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
   "host_permissions": [
     "https://vip.104.com.tw/ResumeTools/resumePreview?*",
     "https://vip.104.com.tw/search/*",
