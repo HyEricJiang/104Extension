@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>104 Bunny</title>
   <style>
-    body { font-family: system-ui, -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; margin: 12px; width: 320px; }
+    body { font-family: system-ui, -apple-system, "PingFang TC", "Microsoft JhengHei", sans-serif; margin: 12px; width: 340px; }
     h1 { font-size: 14px; margin: 0 0 10px; }
     .row { display: flex; gap: 8px; margin-bottom: 8px; }
     button {
@@ -20,36 +20,36 @@
       color: #fff;
     }
     button.secondary { background: #f1f1f1; color: #111; }
-    button.danger { background: #b00020; }
+    button.warning { background: #b26b00; color: #fff; }
     button:disabled { opacity: .5; cursor: not-allowed; }
     .box {
       background: #f7f7f7;
       border-radius: 10px;
       padding: 10px;
       font-size: 12px;
-      line-height: 1.4;
+      line-height: 1.5;
       white-space: pre-wrap;
+      min-height: 78px;
     }
-    .small { font-size: 12px; color: #333; }
-    .ok { color: #0b7; font-weight: 800; }
-    .warn { color: #b60; font-weight: 800; }
+    .small { font-size: 12px; color: #333; margin-top: 8px; }
   </style>
 </head>
 <body>
-  <h1>104 Bunny｜跨分頁收集</h1>
+  <h1>104 Bunny｜快速複製</h1>
 
   <div class="row">
-    <button id="btnStart">開始收集（從目前分頁往右）</button>
+    <button id="btnCopyCurrent">複製本頁</button>
+    <button id="btnCollectRight" class="secondary">從目前往右收集</button>
   </div>
 
   <div class="row">
-    <button id="btnExport" class="secondary">匯出 TSV（複製到剪貼簿）</button>
-    <button id="btnClear" class="danger">清空暫存</button>
+    <button id="btnPause" class="warning">暫停收集</button>
   </div>
 
   <div class="box" id="status">狀態：待命</div>
-  <div class="small" style="margin-top:8px;">
-    暫存筆數：<span id="count">0</span>
+  <div class="small">
+    暫存筆數：<span id="count">0</span><br>
+    完成後會自動把 TSV 複製到剪貼簿，可直接貼到 Google Sheet。
   </div>
 
   <script src="popup.js"></script>

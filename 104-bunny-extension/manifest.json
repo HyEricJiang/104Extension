@@ -1,10 +1,18 @@
 {
   "manifest_version": 3,
   "name": "104 VIP Resume Bunny (Batch Collector)",
-  "version": "0.1.0",
-  "description": "Collect resume contact info across multiple 104 VIP tabs, buffer them, export TSV for Google Sheets.",
-  "permissions": ["tabs", "scripting", "storage", "activeTab"],
-  "host_permissions": ["https://vip.104.com.tw/*"],
+  "version": "0.2.0",
+  "description": "Collect resume contact info across multiple 104 VIP tabs, auto-copy TSV, support hidden contact values and pause.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "activeTab",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://vip.104.com.tw/*"
+  ],
   "action": {
     "default_title": "104 Bunny",
     "default_popup": "popup.html"
