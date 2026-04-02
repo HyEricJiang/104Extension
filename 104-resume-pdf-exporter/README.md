@@ -4,6 +4,8 @@
 > 版本：**v1.4.2**  
 > 用途：在 104 VIP 網站中，將履歷頁自動轉成 **PDF** 並下載，可支援 **單頁下載** 與 **從目前分頁往右批次下載**。
 
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/71318517-b7c4-4cf5-b664-6259e068ecf1" />
+
 ---
 
 ## 1. 這個擴充功能可以做什麼？
