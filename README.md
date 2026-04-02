@@ -1,6 +1,7 @@
 # 104 Resume PDF Exporter / 104 Bunny Extension
 
 這是一套用於 **104 VIP 履歷處理** 的輔助工具，主要用來協助快速整理履歷資料、降低人工操作錯誤，並支援主動應徵履歷網址的正確轉換。
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/a33508fe-5d28-449c-a32a-0b23c1c7c8c6" />
 
 ## 功能簡介
 
