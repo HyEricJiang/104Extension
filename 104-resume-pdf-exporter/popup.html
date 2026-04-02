@@ -5,67 +5,409 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>104 PDF Exporter</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, "PingFang TC", "Noto Sans TC", Arial; margin: 12px; width: 320px; }
-    .row { margin: 10px 0; }
-    .btns { display: flex; gap: 8px; flex-wrap: wrap; }
-    button { padding: 8px 10px; border: 1px solid #ddd; border-radius: 10px; background: #fff; cursor: pointer; }
-    button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
-    button.danger { background: #d93025; color: #fff; border-color: #d93025; }
-    input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 10px; }
-    input[type="checkbox"] { width: auto; padding: 0; border: 0; }
-    label > input[type="checkbox"] { margin-right: 8px; vertical-align: middle; }
-    label { font-size: 12px; color: #444; display: block; margin-bottom: 6px; }
-    .hint { font-size: 12px; color: #666; line-height: 1.4; }
-    .status { font-size: 12px; background: #f6f8fa; padding: 8px; border-radius: 10px; white-space: pre-wrap; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    :root {
+      --bg: #0b1020;
+      --bg-soft: rgba(255, 255, 255, 0.06);
+      --panel: rgba(13, 18, 35, 0.88);
+      --panel-border: rgba(255, 255, 255, 0.08);
+      --text: #ecf2ff;
+      --muted: #9eabc7;
+      --primary: #6ea8fe;
+      --primary-strong: #4f8cff;
+      --accent: #7c5cff;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+      --radius: 18px;
+      --font: Inter, system-ui, -apple-system, "PingFang TC", "Noto Sans TC", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      width: 380px;
+      min-height: 620px;
+      font-family: var(--font);
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(124, 92, 255, 0.32), transparent 36%),
+        radial-gradient(circle at top right, rgba(78, 166, 255, 0.25), transparent 30%),
+        linear-gradient(180deg, #0b1020 0%, #11172b 50%, #0b1020 100%);
+    }
+
+    .shell {
+      padding: 16px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+      overflow: hidden;
+    }
+
+    .hero {
+      position: relative;
+      padding: 20px 20px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      background:
+        linear-gradient(135deg, rgba(124, 92, 255, 0.18), rgba(78, 166, 255, 0.08)),
+        rgba(255,255,255,0.01);
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+
+    .hero p {
+      margin: 8px 0 0;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+
+    .badge-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #dce7ff;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 999px;
+      padding: 6px 10px;
+      white-space: nowrap;
+    }
+
+    .pill-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 10px rgba(34,197,94,0.75);
+      flex: 0 0 auto;
+    }
+
+    .content {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .section {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px;
+      padding: 14px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .section-title h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+    }
+
+    .section-title span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .row {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: #dfe8ff;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    .hint {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    input, select {
+      width: 100%;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(4, 10, 25, 0.72);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 11px 12px;
+      outline: none;
+      font-size: 13px;
+      transition: border-color 0.18s ease, transform 0.18s ease, background 0.18s ease;
+    }
+
+    input::placeholder {
+      color: #7f8ba7;
+    }
+
+    input:focus, select:focus {
+      border-color: rgba(110,168,254,0.85);
+      background: rgba(5, 13, 30, 0.95);
+      box-shadow: 0 0 0 3px rgba(110,168,254,0.16);
+    }
+
+    .preview-box, .status-box {
+      padding: 12px;
+      border-radius: 14px;
+      background: rgba(6, 12, 26, 0.72);
+      border: 1px solid rgba(255,255,255,0.07);
+      font-size: 12px;
+      line-height: 1.55;
+      color: #dde7ff;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .group-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: #f6f8ff;
+      margin-bottom: 4px;
+    }
+
+    .actions {
+      display: grid;
+      gap: 10px;
+    }
+
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    button {
+      appearance: none;
+      border: 0;
+      cursor: pointer;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+      transition: transform 0.18s ease, opacity 0.18s ease, filter 0.18s ease;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      filter: brightness(1.04);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      color: #fff;
+      background: linear-gradient(135deg, var(--primary-strong), var(--accent));
+      box-shadow: 0 10px 22px rgba(79,140,255,0.28);
+    }
+
+    .btn-secondary {
+      color: #eef3ff;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.09);
+    }
+
+    .btn-danger {
+      color: #fff;
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      box-shadow: 0 10px 20px rgba(239,68,68,0.28);
+    }
+
+    .btn-save {
+      width: 100%;
+      color: #eef3ff;
+      background: linear-gradient(135deg, rgba(34,197,94,0.92), rgba(22,163,74,0.92));
+      box-shadow: 0 10px 22px rgba(34,197,94,0.24);
+    }
+
+    .status-inline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .status-chip {
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 800;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.06);
+      color: #edf4ff;
+    }
+
+    .status-chip.running { background: rgba(59,130,246,0.18); color: #bfdbfe; }
+    .status-chip.idle { background: rgba(148,163,184,0.14); color: #dbe6ff; }
+    .status-chip.stopping { background: rgba(245,158,11,0.18); color: #fde68a; }
+
+    .footnote {
+      font-size: 11px;
+      line-height: 1.55;
+      color: var(--muted);
+      text-align: center;
+      padding: 0 10px 14px;
+    }
   </style>
 </head>
 <body>
-  <div class="row">
-    <div class="btns">
-      <button id="downloadCurrent" class="primary">下載目前履歷</button>
-      <button id="downloadRight">往右批次下載</button>
-    </div>
-    <div class="hint">✅ 新模式：不需先開列印頁。會自動開背景預覽頁 → 匯出 PDF → 下載 → 關閉背景頁。</div>
-  </div>
+  <div class="shell">
+    <div class="card">
+      <div class="hero">
+        <h1>104 Resume PDF Exporter</h1>
+        <p>支援手動前綴、群組前綴、自訂後綴，並加入批次安全終止，讓你的職缺分組流程更貼近實際招募操作。</p>
+        <div class="badge-row">
+          <div class="pill"><span class="pill-dot"></span><span id="runningLabel">狀態讀取中</span></div>
+          <div class="pill"><span>批次進度：<b id="progressLabel">0/0</b></span></div>
+        </div>
+      </div>
 
-  <div class="row">
-    <label>下載子資料夾（相對於 Chrome 預設下載資料夾）</label>
-    <input id="subdir" placeholder="例如：104履歷下載區/" />
-    <div class="hint">不填 = 直接存到預設下載資料夾。支援子路徑：招募/104履歷下載區/</div>
-  </div>
+      <div class="content">
+        <div class="section">
+          <div class="section-title">
+            <h2>匯出操作</h2>
+            <span>支援單份與往右批次</span>
+          </div>
+          <div class="actions">
+            <div class="action-grid">
+              <button id="downloadCurrent" class="btn-primary">下載目前履歷</button>
+              <button id="downloadRight" class="btn-secondary">往右批次下載</button>
+            </div>
+            <button id="stopBatch" class="btn-danger" disabled>停止目前批次</button>
+            <div class="hint">停止功能採安全終止。已經開始輸出的那一份會先完成，之後不再繼續後續履歷，避免半成品檔案或下載流程異常。</div>
+          </div>
+        </div>
 
-  <div class="row grid">
-    <div>
-      <label>檔名前綴（職稱，可留白）</label>
-      <input id="filenamePrefix" placeholder="例如：Java工程師" />
-    </div>
-    <div>
-      <label>檔名後綴（來源，可留白）</label>
-      <input id="filenameSuffix" placeholder="例如：104" />
-    </div>
-    <div class="hint" style="grid-column: 1 / -1;">檔名格式：<b>職稱_Name_來源.pdf</b>。兩者留白會變成 <b>Name.pdf</b>。</div>
-  </div>
+        <div class="section">
+          <div class="section-title">
+            <h2>命名設定</h2>
+            <span>前綴模式 + 後綴自訂</span>
+          </div>
 
-  <div class="row grid">
-    <div>
-      <label>首份等待（ms）</label>
-      <input id="firstWait" type="number" min="0" />
-    </div>
-    <div>
-      <label>後續等待（ms）</label>
-      <input id="nextWait" type="number" min="0" />
-    </div>
-  </div>
+          <div class="row">
+            <div>
+              <label for="prefixMode">檔名前綴模式</label>
+              <select id="prefixMode">
+                <option value="manual">手動輸入前綴</option>
+                <option value="tabGroup">使用目前分頁群組名稱</option>
+                <option value="none">不使用前綴</option>
+              </select>
+            </div>
+          </div>
 
-  <div class="row">
-    <button id="save">儲存設定</button>
-  </div>
+          <div class="grid-2 row">
+            <div>
+              <label for="filenamePrefix">手動前綴</label>
+              <input id="filenamePrefix" placeholder="例如：Jr.Java PG" />
+            </div>
+            <div>
+              <label for="filenameSuffix">檔名後綴</label>
+              <input id="filenameSuffix" placeholder="例如：已邀約 / 104" />
+            </div>
+          </div>
 
-  <div class="row">
-    <label>狀態</label>
-    <div id="status" class="status">讀取中…</div>
+          <div class="row">
+            <label for="subdir">下載子資料夾</label>
+            <input id="subdir" placeholder="例如：招募/104履歷下載區/" />
+            <div class="hint">路徑會建立在 Chrome 預設下載資料夾底下。你可以依招募流程自行拆資料夾層級。</div>
+          </div>
+
+          <div class="row">
+            <div class="section-title" style="margin:0 0 6px;">
+              <h2 style="font-size:12px;">目前分頁群組</h2>
+              <span id="groupModeHint">群組模式可直接帶入</span>
+            </div>
+            <div class="preview-box">
+              <div class="group-name" id="groupName">讀取中…</div>
+              <div class="hint" id="groupHint">若目前分頁沒有群組，群組模式會自動退回手動前綴。</div>
+            </div>
+          </div>
+
+          <div class="row">
+            <label>檔名預覽</label>
+            <div id="filenamePreview" class="preview-box">Jr.Java PG_王小明_104.pdf</div>
+          </div>
+
+          <div class="row">
+            <button id="save" class="btn-save">儲存設定</button>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">
+            <h2>進階等待設定</h2>
+            <span>改善列印穩定性</span>
+          </div>
+          <div class="grid-2">
+            <div>
+              <label for="firstWait">首份等待（ms）</label>
+              <input id="firstWait" type="number" min="0" />
+            </div>
+            <div>
+              <label for="nextWait">後續等待（ms）</label>
+              <input id="nextWait" type="number" min="0" />
+            </div>
+          </div>
+          <div class="hint" style="margin-top:8px;">第一份通常需要更久時間讓背景預覽頁穩定渲染；後續可維持較短等待，提升批次效率。</div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">
+            <h2>執行狀態</h2>
+            <span>即時同步背景服務</span>
+          </div>
+          <div class="status-inline">
+            <div id="statusChip" class="status-chip idle">閒置中</div>
+            <div class="hint" id="currentInfo">目前：0 / 0</div>
+          </div>
+          <div id="status" class="status-box">讀取中…</div>
+        </div>
+      </div>
+
+      <div class="footnote">
+        建議將不同職缺放在不同 Chrome 分頁群組中，匯出時直接帶入職缺群組名稱，能更自然地銜接你的履歷邀約與歸檔流程。
+      </div>
+    </div>
   </div>
 
   <script src="popup.js"></script>

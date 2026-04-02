@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "104 VIP Resume PDF Exporter (Control)",
-  "version": "1.4.3",
-  "description": "Export 104 VIP resumes to PDF: one-click from current resume page (search/document/preview) and batch to the right until the first non-resume page. Supports custom filename prefix/suffix.",
+  "version": "1.5.0",
+  "description": "Export 104 VIP resumes to PDF with manual/group prefix modes, custom suffix, batch stop control, and upgraded UI.",
   "action": {
     "default_title": "104 PDF Exporter",
     "default_popup": "popup.html"
@@ -12,6 +12,7 @@
   },
   "permissions": [
     "tabs",
+    "tabGroups",
     "scripting",
     "downloads",
     "debugger",

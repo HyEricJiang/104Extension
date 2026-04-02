@@ -1,41 +1,39 @@
 // 104 VIP Resume PDF Exporter - MV3
-// Features:
-//  - One-click download from current tab (search/document/preview)
-//  - Batch download from current tab to the right until the FIRST non-resume page
-// Implementation:
-//  - Opens resumePreview in a background tab -> Page.printToPDF -> downloads -> closes background tab
-// Badge: Idle=PDF, Running=progress, Done=OK then back to PDF, Error=ERR then back to PDF
+// 功能摘要：
+// 1. 支援目前分頁單份匯出
+// 2. 支援從目前分頁往右批次匯出
+// 3. 支援檔名前綴模式：手動 / 分頁群組 / 不使用前綴
+// 4. 支援自訂檔名後綴
+// 5. 支援批次安全終止：會在目前這份完成後停止，不硬切正在輸出的 PDF
+// 6. 支援較完整的狀態同步，讓 popup 可以顯示更清楚的執行資訊
 
 const PREVIEW_URL_PREFIX = "https://vip.104.com.tw/ResumeTools/resumePreview";
 const NAME_SELECTOR =
   "#app > div.container.page-container.container-3 > section > div > section > div > div.vip-resume-card.resume-block.resume-card.size-medium > div.resume-card-item.resume-card__center > div > h2 > p";
 
 const DEFAULT_SETTINGS = {
-  subdir: "104履歷下載區/", // relative to Chrome download directory
+  subdir: "104履歷下載區/",
   firstWait: 2800,
   nextWait: 800,
-  // ✅ 檔名前綴/後綴（可留白）：職稱_Name_來源
+
+  // 為了讓使用者的職缺分組流程可以更自然地帶進檔名，
+  // 這裡把前綴來源做成可切換模式，而不是只保留單一文字框。
+  filenamePrefixMode: "manual", // manual | tabGroup | none
   filenamePrefix: "",
   filenameSuffix: ""
 };
 
 const PDF_PRINT_OPTIONS = { printBackground: true, preferCSSPageSize: true };
 
-/** =========================
- *  Badge state machine (Idle=PDF)
- *  ========================= */
 const PDF_BADGE = {
   IDLE_TEXT: "PDF",
-  IDLE_COLOR: "#1a73e8",
-
-  RUNNING_COLOR: "#1a73e8",
-
+  IDLE_COLOR: "#4f8cff",
+  RUNNING_COLOR: "#4f8cff",
+  STOPPING_COLOR: "#f59e0b",
   OK_TEXT: "OK",
-  OK_COLOR: "#34a853",
-
+  OK_COLOR: "#22c55e",
   ERR_TEXT: "ERR",
-  ERR_COLOR: "#d93025",
-
+  ERR_COLOR: "#ef4444",
   RESET_AFTER_MS: 4500
 };
 
@@ -45,6 +43,32 @@ let pdfBadgeState = {
   total: 0,
   lastTitle: "PDF"
 };
+
+let state = {
+  running: false,
+  stopRequested: false,
+  currentIndex: 0,
+  total: 0,
+  progressText: "0/0",
+  lastMessage: "",
+  settings: { ...DEFAULT_SETTINGS }
+};
+
+function logInfo(message, data = null) {
+  if (data !== null) {
+    console.log(`[104 PDF Exporter] ${message}`, data);
+  } else {
+    console.log(`[104 PDF Exporter] ${message}`);
+  }
+}
+
+function logError(message, error = null) {
+  if (error) {
+    console.error(`[104 PDF Exporter] ${message}`, error);
+  } else {
+    console.error(`[104 PDF Exporter] ${message}`);
+  }
+}
 
 function badgeSet(text, color, title) {
   chrome.action.setBadgeText({ text: text || "" });
@@ -59,15 +83,19 @@ function badgeIdle(title = "PDF") {
 }
 
 function badgeProgressText(current, total) {
-  const t = `${current}/${total}`;
-  return t.length <= 4 ? t : String(current);
+  const text = `${current}/${total}`;
+  return text.length <= 4 ? text : String(current);
 }
 
 function badgeRunning(current, total, title) {
   pdfBadgeState.running = true;
   pdfBadgeState.current = current;
   pdfBadgeState.total = total;
-  badgeSet(badgeProgressText(current, total), PDF_BADGE.RUNNING_COLOR, title || `匯出中：${current}/${total}`);
+  badgeSet(
+    badgeProgressText(current, total),
+    state.stopRequested ? PDF_BADGE.STOPPING_COLOR : PDF_BADGE.RUNNING_COLOR,
+    title || `匯出中：${current}/${total}`
+  );
 }
 
 function badgeOkThenReset(title = "完成") {
@@ -86,25 +114,34 @@ function badgeErrThenReset(title = "錯誤") {
   }, PDF_BADGE.RESET_AFTER_MS);
 }
 
-// ✅ Ensure idle shows PDF on install + SW restart
-chrome.runtime.onInstalled.addListener(() => badgeIdle("PDF"));
+chrome.runtime.onInstalled.addListener(async () => {
+  await syncSettingsFromStorage();
+  badgeIdle("PDF");
+});
+
 badgeIdle("PDF");
 
-/** =========================
- *  Runtime state
- *  ========================= */
-let state = {
-  running: false,
-  currentIndex: 0,
-  total: 0,
-  progressText: "",
-  lastMessage: "",
-  settings: { ...DEFAULT_SETTINGS }
-};
+async function syncSettingsFromStorage() {
+  const { settings } = await chrome.storage.local.get("settings");
+  state.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+  return state.settings;
+}
 
-/** =========================
- *  Message router
- *  ========================= */
+function resetRunState() {
+  state.running = false;
+  state.stopRequested = false;
+  state.currentIndex = 0;
+  state.total = 0;
+  state.progressText = "0/0";
+}
+
+function updateProgress(index, total, message = "") {
+  state.currentIndex = index;
+  state.total = total;
+  state.progressText = `${index}/${total}`;
+  if (message) state.lastMessage = message;
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
@@ -113,54 +150,61 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
 
       if (msg?.cmd === "applySettings") {
-        const { settings } = await chrome.storage.local.get("settings");
-        state.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
-        badgeIdle("PDF");
+        await syncSettingsFromStorage();
+        if (!state.running) badgeIdle("PDF");
         return sendResponse({ ok: true });
       }
 
-      // ✅ New mode: from current tab (searchResumeMaster or resumePreview) -> open preview tab in background -> printToPDF -> download -> close
+      if (msg?.cmd === "getCurrentTabGroupInfo") {
+        const info = await getActiveTabGroupInfo();
+        return sendResponse({ ok: true, ...info });
+      }
+
+      if (msg?.cmd === "stopBatch") {
+        if (!state.running) {
+          return sendResponse({ ok: false, error: "目前沒有執行中的批次可停止。" });
+        }
+        state.stopRequested = true;
+        state.lastMessage = "已收到停止請求，會在目前這份完成後停止。";
+        badgeRunning(state.currentIndex || 0, state.total || 0, "停止請求中");
+        return sendResponse({ ok: true });
+      }
+
       if (msg?.cmd === "downloadCurrent") {
-        if (state.running) return sendResponse({ ok: false, error: "目前正在匯出中，請先 Stop 或等完成。" });
-        runDownloadCurrent().catch(err => hardFail(err));
+        if (state.running) {
+          return sendResponse({ ok: false, error: "目前正在匯出中，請先等待完成或按停止。" });
+        }
+        runDownloadCurrent().catch((error) => hardFail(error));
         return sendResponse({ ok: true });
       }
 
-      // ✅ New mode: batch from active tab to the right, until first non-104 resume page
       if (msg?.cmd === "downloadRight") {
-        if (state.running) return sendResponse({ ok: false, error: "目前正在匯出中，請先 Stop 或等完成。" });
-        runDownloadRightBatch().catch(err => hardFail(err));
+        if (state.running) {
+          return sendResponse({ ok: false, error: "目前正在匯出中，請先等待完成或按停止。" });
+        }
+        runDownloadRightBatch().catch((error) => hardFail(error));
         return sendResponse({ ok: true });
       }
 
-      // Optional: if you want popup open to force idle badge:
       if (msg?.cmd === "initBadgePDF") {
         badgeIdle("PDF");
         return sendResponse({ ok: true });
       }
 
       sendResponse({ ok: false, error: "unknown cmd" });
-    } catch (e) {
-      sendResponse({ ok: false, error: e?.message || String(e) });
+    } catch (error) {
+      sendResponse({ ok: false, error: error?.message || String(error) });
     }
   })();
 
   return true;
 });
 
-/** =========================
- *  New mode A: open preview tab in background -> printToPDF -> download -> close
- *  ========================= */
 async function runDownloadCurrent() {
   const active = await getActiveTab();
   const currentUrl = active?.url || "";
-
-  // 先直接從目前網址解析，避免主動應徵頁誤抓頁面中其他人的履歷連結。
-  // 這次修正的核心就是：ApplyResume 若網址本身已帶 sn / ec，應優先以該組參數轉換。
   let info = parseResumeInfoFromUrl(currentUrl);
 
-  // 只有在 ApplyResume 本身解析不到必要參數時，才退回舊邏輯去頁面中找第一個履歷網址。
-  // 這樣可以兼顧舊頁型，同時避免導到錯的人。
   if ((!info || (!info.idno && !info.snapshotId)) && is104ApplyResumePage(currentUrl)) {
     const resolved = await findFirstResumeUrlInTab(active?.id);
     if (resolved) {
@@ -170,20 +214,26 @@ async function runDownloadCurrent() {
 
   if (!info || (!info.idno && !info.snapshotId)) {
     throw new Error(
-      "目前分頁不是可辨識的 104 履歷/應徵頁，或缺少必要參數（search 需 idno；document/apply 需 sn，apply/document 另需 ec）。請切到正確頁面後再試。"
+      "目前分頁不是可辨識的 104 履歷/應徵頁，或缺少必要參數。請切到正確頁面後再試。"
     );
   }
 
-  await runIdnoExportJob([info], "下載目前履歷");
+  const item = {
+    ...info,
+    sourceTabId: active?.id || null,
+    sourceTabGroupTitle: await getTabGroupTitleByTab(active)
+  };
+
+  await runIdnoExportJob([item], "下載目前履歷");
 }
 
 async function runDownloadRightBatch() {
   const tabs = await chrome.tabs.query({ currentWindow: true });
-  const active = tabs.find(t => t.active);
+  const active = tabs.find((tab) => tab.active);
   if (!active) throw new Error("找不到目前分頁（active tab）。");
 
   const sorted = [...tabs].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  const startIdx = sorted.findIndex(t => t.id === active.id);
+  const startIdx = sorted.findIndex((tab) => tab.id === active.id);
   if (startIdx < 0) throw new Error("無法定位目前分頁位置。");
 
   const items = [];
@@ -194,12 +244,9 @@ async function runDownloadRightBatch() {
     const url = tab.url || "";
 
     const isCandidate = is104ResumePage(url) || is104ApplyResumePage(url);
-    if (!isCandidate) break; // stop at first non-candidate page
+    if (!isCandidate) break;
 
-    // 先以當前網址直接解析，ApplyResume 也優先吃自己的 sn/ec。
     let info = parseResumeInfoFromUrl(url);
-
-    // 只有 ApplyResume 缺參數時，才退回 DOM 抓連結。
     if ((!info || (!info.idno && !info.snapshotId)) && is104ApplyResumePage(url)) {
       const resolved = await findFirstResumeUrlInTab(tab?.id);
       if (resolved) {
@@ -214,40 +261,49 @@ async function runDownloadRightBatch() {
     const key = `${keyMode}|${keyValue}|${info.ec || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push(info);
+
+    items.push({
+      ...info,
+      sourceTabId: tab?.id || null,
+      sourceTabGroupTitle: await getTabGroupTitleByTab(tab)
+    });
   }
 
   if (items.length === 0) {
-    throw new Error("往右沒有找到可下載的 104 履歷頁（search/SearchResumeMaster、document/master、ResumeTools/resumePreview、apply/ApplyResume）。");
+    throw new Error("往右沒有找到可下載的 104 履歷頁。");
   }
 
   await runIdnoExportJob(items, `往右批次下載（${items.length} 份）`);
 }
 
 async function runIdnoExportJob(items, jobTitle) {
-  // Load settings fresh
-  const { settings } = await chrome.storage.local.get("settings");
-  state.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
+  await syncSettingsFromStorage();
 
   state.running = true;
+  state.stopRequested = false;
   state.currentIndex = 0;
   state.total = items.length;
-  state.progressText = "0/" + items.length;
+  state.progressText = `0/${items.length}`;
   state.lastMessage = `開始：${jobTitle}`;
-
   badgeIdle(`準備：${jobTitle}`);
 
-  const report = { ok: 0, fail: 0, failures: [] };
+  const report = { ok: 0, fail: 0, stopped: false, failures: [] };
 
   for (let i = 0; i < items.length; i++) {
-    state.currentIndex = i + 1;
-    state.progressText = `${state.currentIndex}/${state.total}`;
-    badgeRunning(state.currentIndex, state.total, `${jobTitle}：${state.currentIndex}/${state.total}`);
+    if (state.stopRequested) {
+      report.stopped = true;
+      state.lastMessage = `已停止：共完成 ${report.ok} 份，後續 ${items.length - i} 份未執行。`;
+      logInfo("批次已依使用者請求停止。", { completed: report.ok, remaining: items.length - i });
+      break;
+    }
 
     const info = items[i];
     const idno = info?.idno || "";
     const snapshotId = info?.snapshotId || "";
     let previewTabId = null;
+
+    updateProgress(i + 1, items.length, `開始處理第 ${i + 1}/${items.length} 份`);
+    badgeRunning(state.currentIndex, state.total, `${jobTitle}：${state.currentIndex}/${state.total}`);
 
     try {
       const url = buildPreviewUrl(info);
@@ -255,13 +311,13 @@ async function runIdnoExportJob(items, jobTitle) {
       previewTabId = tab.id;
       if (!previewTabId) throw new Error("建立預覽分頁失敗（tab.id 不存在）。");
 
-      // Wait for complete, then extra render wait
       await waitTabComplete(previewTabId, 45000);
       await sleep(i === 0 ? state.settings.firstWait : state.settings.nextWait);
 
       const name = await getCandidateName(previewTabId);
       const safeName = sanitizeFilename(name || (snapshotId ? `sn_${snapshotId}` : `idno_${idno}`));
-      const prefix = sanitizeFilename(String(state.settings.filenamePrefix || "").trim());
+
+      const prefix = await resolveFilenamePrefix(info);
       const suffix = sanitizeFilename(String(state.settings.filenameSuffix || "").trim());
       const filenameOnly = buildFilename(prefix, safeName, suffix);
 
@@ -269,33 +325,52 @@ async function runIdnoExportJob(items, jobTitle) {
       const filename = subdir ? normalizeSubdir(subdir) + filenameOnly : filenameOnly;
 
       const pdfBytes = await printTabToPDF(previewTabId);
-
-      // ✅ Ensure the file is fully downloaded before closing the background tab.
       const downloadId = await downloadPdfBytes(pdfBytes, filename);
-      state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已送出下載：${filenameOnly} (id:${downloadId})`;
+
+      state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly} (id:${downloadId})`;
       report.ok++;
-    } catch (e) {
-      const err = e?.message || String(e);
+      logInfo("匯出成功。", { filenameOnly, downloadId, sourceTabId: info?.sourceTabId || null });
+    } catch (error) {
+      const errMessage = error?.message || String(error);
       report.fail++;
-      report.failures.push({ index: `${state.currentIndex}/${state.total}`, idno, snapshotId, ec: info?.ec || "", error: err });
-      state.lastMessage = `❌ ${state.currentIndex}/${state.total} 失敗：${err}`;
+      report.failures.push({
+        index: `${state.currentIndex}/${state.total}`,
+        idno,
+        snapshotId,
+        ec: info?.ec || "",
+        error: errMessage
+      });
+      state.lastMessage = `❌ ${state.currentIndex}/${state.total} 失敗：${errMessage}`;
+      logError("匯出失敗。", { error: errMessage, sourceTabId: info?.sourceTabId || null });
     } finally {
       if (previewTabId) {
-        try { await chrome.tabs.remove(previewTabId); } catch (_) {}
+        try {
+          await chrome.tabs.remove(previewTabId);
+        } catch (_) {}
       }
     }
   }
 
   state.running = false;
+  state.stopRequested = false;
 
-  if (report.fail === 0) {
-    badgeOkThenReset(`完成：成功 ${report.ok}/${state.total}`);
+  if (report.stopped) {
+    if (report.fail === 0) {
+      badgeOkThenReset(`已停止：成功 ${report.ok}/${items.length}`);
+    } else {
+      badgeErrThenReset(`已停止：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`);
+    }
+  } else if (report.fail === 0) {
+    state.lastMessage = `完成：成功 ${report.ok}/${items.length}`;
+    badgeOkThenReset(`完成：成功 ${report.ok}/${items.length}`);
   } else {
-    badgeErrThenReset(`完成：成功 ${report.ok}/${state.total}，失敗 ${report.fail}`);
+    state.lastMessage = `完成：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`;
+    badgeErrThenReset(`完成：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`);
   }
 
   console.group(`📄 104 PDF Export Report - ${jobTitle}`);
-  console.log("Success:", report.ok, "/", state.total);
+  console.log("Success:", report.ok, "/", items.length);
+  console.log("Stopped:", report.stopped);
   console.log("Failures:", report.failures);
   console.groupEnd();
 }
@@ -303,6 +378,44 @@ async function runIdnoExportJob(items, jobTitle) {
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ currentWindow: true, active: true });
   return tabs?.[0] || null;
+}
+
+async function getActiveTabGroupInfo() {
+  const activeTab = await getActiveTab();
+  if (!activeTab?.id) {
+    return { hasGroup: false, title: "", groupId: -1, hint: "找不到目前分頁。" };
+  }
+
+  const title = await getTabGroupTitleByTab(activeTab);
+  return {
+    hasGroup: Boolean(title),
+    title: title || "",
+    groupId: activeTab.groupId ?? -1,
+    hint: title ? "已抓到群組名稱。" : "目前分頁沒有群組，會改用手動前綴。"
+  };
+}
+
+async function getTabGroupTitleByTab(tab) {
+  try {
+    if (!tab || typeof tab.groupId !== "number" || tab.groupId < 0) return "";
+    const group = await chrome.tabGroups.get(tab.groupId);
+    return sanitizeFilename(String(group?.title || "").trim());
+  } catch (_) {
+    return "";
+  }
+}
+
+async function resolveFilenamePrefix(info) {
+  const mode = String(state.settings.filenamePrefixMode || "manual").trim();
+  const manualPrefix = sanitizeFilename(String(state.settings.filenamePrefix || "").trim());
+  const groupPrefix = sanitizeFilename(String(info?.sourceTabGroupTitle || "").trim());
+
+  // 為了不讓群組名稱讀取失敗時直接變空，我們在 tabGroup 模式下做 fallback。
+  // 設計原因：
+  // 使用者已經明確表示，即使偏好群組，也希望保留手動輸入可補位。
+  if (mode === "tabGroup") return groupPrefix || manualPrefix;
+  if (mode === "none") return "";
+  return manualPrefix;
 }
 
 function is104ResumePage(url) {
@@ -332,10 +445,6 @@ function is104ApplyResumePage(url) {
   }
 }
 
-/**
- * 從「主動投遞/應徵」頁面中抓到真正的履歷網址。
- * 會找：resumePreview / SearchResumeMaster / document/master 其中一種。
- */
 async function findFirstResumeUrlInTab(tabId) {
   if (!tabId) return "";
   try {
@@ -344,24 +453,20 @@ async function findFirstResumeUrlInTab(tabId) {
       func: () => {
         const urls = [];
 
-        // 常見：a[href]
-        document.querySelectorAll("a[href]").forEach(a => {
-          try {
-            urls.push(a.href);
-          } catch (_) {}
+        document.querySelectorAll("a[href]").forEach((a) => {
+          try { urls.push(a.href); } catch (_) {}
         });
 
-        // 偶爾會用 data-href / data-url
-        document.querySelectorAll("[data-href],[data-url]").forEach(el => {
-          const v = el.getAttribute("data-href") || el.getAttribute("data-url") || "";
-          if (!v) return;
+        document.querySelectorAll("[data-href],[data-url]").forEach((el) => {
+          const value = el.getAttribute("data-href") || el.getAttribute("data-url") || "";
+          if (!value) return;
           try {
-            urls.push(new URL(v, location.href).toString());
+            urls.push(new URL(value, location.href).toString());
           } catch (_) {}
         });
 
         const re = /https:\/\/vip\.104\.com\.tw\/(resumetools\/resumepreview|search\/searchresumemaster|document\/master)/i;
-        return urls.find(u => re.test(u)) || "";
+        return urls.find((u) => re.test(u)) || "";
       }
     });
 
@@ -386,42 +491,26 @@ function parseResumeInfoFromUrl(url) {
       (u.searchParams.get("sn") || "").trim() ||
       (u.searchParams.get("snapshotIds") || "").trim();
 
-    // A) 主動應徵 / ApplyResume
-    // 範例：
-    // https://vip.104.com.tw/apply/ApplyResume?sn=803622326&in=30000007241768&ec=4&rc=14011003
-    // 需轉為：
-    // https://vip.104.com.tw/ResumeTools/resumePreview?ec=4&pageSource=apply&searchEngineIdNos=&snapshotIds=803622326
-    // 重點：
-    // - sn => snapshotIds
-    // - ec => ec
-    // - pageSource 必須是 apply
-    // - 不可誤用頁面中的其他履歷連結，否則可能導出錯人的履歷
     if (pathname === "/apply/applyresume" && snapshotId && ec) {
       return { mode: "apply", snapshotId, ec };
     }
 
-    // B) 預覽頁已明確標示 apply
     if (pageSource === "apply" && snapshotId && ec) {
       return { mode: "apply", snapshotId, ec };
     }
 
-    // C) 搜尋履歷
     if (pageSource === "search" && idno) {
       return { mode: "search", idno };
     }
 
-    // D) 文件履歷 / 預覽頁 document
     if ((pathname === "/document/master" || pageSource === "document") && snapshotId) {
       return { mode: "document", snapshotId, ec };
     }
 
-    // E) 一般搜尋頁
     if (idno) {
       return { mode: "search", idno };
     }
 
-    // F) 最後保底：若只有 snapshotId，預設仍視為 document
-    // 這是為了相容舊網址，但不會覆蓋前面的 apply 判斷。
     if (snapshotId) {
       return { mode: "document", snapshotId, ec };
     }
@@ -433,11 +522,9 @@ function parseResumeInfoFromUrl(url) {
 }
 
 function buildPreviewUrl(info) {
-  const u = new URL("https://vip.104.com.tw/ResumeTools/resumePreview");
+  const u = new URL(PREVIEW_URL_PREFIX);
 
   if (info?.mode === "apply") {
-    // 主動應徵情境必須明確指定 pageSource=apply，
-    // 並以 sn 對應到 snapshotIds，否則有機率開出錯的人。
     u.searchParams.set("ec", String(info.ec || ""));
     u.searchParams.set("pageSource", "apply");
     u.searchParams.set("searchEngineIdNos", "");
@@ -446,8 +533,6 @@ function buildPreviewUrl(info) {
   }
 
   if (info?.mode === "document") {
-    // 文件情境仍保留 snapshotId / ec 的既有邏輯，
-    // 因為文件版履歷通常需要這組資訊才能正確開出指定版本。
     if (info?.ec) u.searchParams.set("ec", String(info.ec));
     u.searchParams.set("pageSource", "document");
     u.searchParams.set("searchEngineIdNos", "");
@@ -455,7 +540,6 @@ function buildPreviewUrl(info) {
     return u.toString();
   }
 
-  // 搜尋情境改為只靠 idno 直接拼接預覽頁，不再帶 rc / ec / 其他參數。
   u.searchParams.set("pageSource", "search");
   u.searchParams.set("searchEngineIdNos", String(info?.idno || ""));
   return u.toString();
@@ -507,14 +591,11 @@ function waitTabComplete(tabId, timeoutMs) {
   });
 }
 
-/** =========================
- *  Page helpers
- *  ========================= */
 async function getCandidateName(tabId) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (sel) => {
-      const el = document.querySelector(sel);
+    func: (selector) => {
+      const el = document.querySelector(selector);
       return el ? (el.textContent || "").trim() : "";
     },
     args: [NAME_SELECTOR]
@@ -523,7 +604,11 @@ async function getCandidateName(tabId) {
 }
 
 function sanitizeFilename(name) {
-  return name.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
+  return String(name || "")
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
 }
 
 function buildFilename(prefix, name, suffix) {
@@ -535,15 +620,12 @@ function buildFilename(prefix, name, suffix) {
   return `${base}.pdf`;
 }
 
-function normalizeSubdir(s) {
-  s = s.replace(/^\/+/, ""); // must be relative
-  if (!s.endsWith("/")) s += "/";
-  return s;
+function normalizeSubdir(subdir) {
+  let value = String(subdir || "").replace(/^\/+/, "");
+  if (value && !value.endsWith("/")) value += "/";
+  return value;
 }
 
-/** =========================
- *  PDF export via CDP
- *  ========================= */
 async function printTabToPDF(tabId) {
   const debuggee = { tabId };
   const protocolVersion = "1.3";
@@ -554,23 +636,23 @@ async function printTabToPDF(tabId) {
 
     const { data } = await chrome.debugger.sendCommand(debuggee, "Page.printToPDF", PDF_PRINT_OPTIONS);
     if (!data) throw new Error("printToPDF 沒有回傳資料，可能頁面尚未完成渲染。");
-
     return base64ToUint8Array(data);
   } finally {
-    try { await chrome.debugger.detach(debuggee); } catch (_) {}
+    try {
+      await chrome.debugger.detach(debuggee);
+    } catch (_) {}
   }
 }
 
 function base64ToUint8Array(base64) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
   return bytes;
 }
 
-/** =========================
- *  Download (data: URL) - MV3 safe
- *  ========================= */
 async function downloadPdfBytes(uint8Array, filename) {
   const base64 = uint8ToBase64(uint8Array);
   const url = `data:application/pdf;base64,${base64}`;
@@ -582,7 +664,6 @@ async function downloadPdfBytes(uint8Array, filename) {
     saveAs: false
   });
 
-  // ✅ Always wait until the file is fully downloaded before we close the background preview tab.
   await waitForDownloadComplete(downloadId, 120000);
   return downloadId;
 }
@@ -610,8 +691,14 @@ function waitForDownloadComplete(downloadId, timeoutMs) {
 
     function onChanged(delta) {
       if (delta.id !== downloadId) return;
-      if (delta.state?.current === "complete") { cleanup(); resolve(); }
-      if (delta.error?.current) { cleanup(); reject(new Error(`下載失敗：${delta.error.current}`)); }
+      if (delta.state?.current === "complete") {
+        cleanup();
+        resolve();
+      }
+      if (delta.error?.current) {
+        cleanup();
+        reject(new Error(`下載失敗：${delta.error.current}`));
+      }
     }
 
     function cleanup() {
@@ -623,16 +710,14 @@ function waitForDownloadComplete(downloadId, timeoutMs) {
   });
 }
 
-/** =========================
- *  Utils
- *  ========================= */
 function sleep(ms) {
-  return new Promise(res => setTimeout(res, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function hardFail(err) {
-  console.error(err);
+function hardFail(error) {
+  logError("背景流程發生未處理錯誤。", error);
   state.running = false;
-  state.lastMessage = err?.message || String(err);
+  state.stopRequested = false;
+  state.lastMessage = error?.message || String(error);
   badgeErrThenReset(state.lastMessage || "錯誤");
 }
