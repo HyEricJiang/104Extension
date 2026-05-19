@@ -1,0 +1,35 @@
+// ==UserScript==
+// @name         104 Hide Resume Cards With Remarks
+// @namespace    local-104-filter
+// @version      1.1
+// @description  Hide entire 104 resume cards that already have remarks
+// @match        https://*.104.com.tw/*
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  function hideRemarkedResumeCards() {
+    const remarks = document.querySelectorAll('.resume-remark.mt-2');
+
+    remarks.forEach(remark => {
+      const card = remark.closest('.vip-resume-card.resume-card');
+
+      if (card) {
+        card.style.display = 'none';
+      }
+    });
+  }
+
+  hideRemarkedResumeCards();
+
+  const observer = new MutationObserver(() => {
+    hideRemarkedResumeCards();
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+})();
