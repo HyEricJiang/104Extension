@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         104 Hide Resume Cards With Remarks Or Recent Outreach
 // @namespace    local-104-filter
-// @version      1.4
-// @description  Hide 104 resume cards with remarks or recent active outreach within 3 months
+// @version      1.5
+// @description  Hide 104 resume cards with remarks or recent history containing active outreach within 3 months
 // @match        https://*.104.com.tw/*
 // @run-at       document-idle
 // ==/UserScript==
@@ -36,10 +36,7 @@
   }
 
   function isActiveOutreach(text) {
-    return (
-      text.includes('發出聊聊') ||
-      text.includes('發出邀約面試')
-    );
+    return text.includes('發出');
   }
 
   function hasRecentActiveOutreach(card) {
