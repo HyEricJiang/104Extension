@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Standalone
 // @namespace    local.resume-screening-system
-// @version      1.1.0
+// @version      1.2.0
 // @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @match        https://vip.104.com.tw/search/*
@@ -39,6 +39,27 @@
       hardRequiredPreferred: [".net core", ".net 6", "mvc"],
       positiveKeywords: ["c#", "asp.net", ".net core", ".net 6", "mvc", "mssql", "ms sql", "mysql", "oracle", "vue", "react", "angular", "javascript", "html", "css", "git", "uml", "ooad", "銀行", "電信", "si", "系統整合", "code review", "mentor", "0到1", "專案開發"],
       negativeIfCurrentMissingAny: ["c#", ".net", "asp.net"]
+    },
+    "system-analyst": {
+      name: "System Analyst",
+      hardRequiredAny: ["系統分析", "sa", "需求", "規格", "uml", "use case", "flowchart"],
+      hardRequiredPreferred: ["需求訪談", "需求分析", "功能規格", "需求規格", "wireframe", "prototype", "erd", "api", "驗收"],
+      positiveKeywords: ["系統分析", "需求分析", "需求訪談", "規格書", "需求規格", "功能規格", "uml", "use case", "flowchart", "erd", "api", "wireframe", "prototype", "axure", "figma", "驗收", "測試", "qa", "sql", "java", "c#", "系統整合", "si", "客戶需求", "跨部門"],
+      negativeIfCurrentMissingAny: ["系統分析", "需求", "規格", "uml", "sa", "分析師"]
+    },
+    "qa-engineer": {
+      name: "Test Engineer / Quality Assurance",
+      hardRequiredAny: ["測試", "qa", "quality assurance", "test"],
+      hardRequiredPreferred: ["web", "app", "功能測試", "測試報告", "bug", "postman", "jira"],
+      positiveKeywords: ["測試", "qa", "quality assurance", "test", "functional test", "功能測試", "usability test", "使用者測試", "security test", "安全性測試", "壓力測試", "stress test", "整合測試", "測試計畫", "測試報告", "bug", "bug tracking", "issue tracking", "jira", "redmine", "github issues", "postman", "notion", "web", "app", "驗收", "跨瀏覽器"],
+      negativeIfCurrentMissingAny: ["測試", "qa", "test", "品質", "驗證"]
+    },
+    "project-manager": {
+      name: "Project Manager",
+      hardRequiredAny: ["專案", "project manager", "pm", "專案經理", "專案管理"],
+      hardRequiredPreferred: ["web application", "系統分析", "wbs", "jira", "notion", "trello", "agile", "scrum", "pmp"],
+      positiveKeywords: ["專案經理", "專案管理", "project manager", "pm", "web application", "系統分析", "需求", "wbs", "流程圖", "jira", "notion", "trello", "agile", "scrum", "瀑布", "pmp", "資源調度", "進度追蹤", "風險控管", "任務分配", "驗收", "結案", "pre sale", "presale", "投標", "簡報", "客戶溝通", "跨部門", "si", "系統整合", "程式開發"],
+      negativeIfCurrentMissingAny: ["專案", "pm", "project", "管理", "系統分析"]
     }
   };
 
@@ -88,7 +109,7 @@
 
     panel.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
-        <strong>104 履歷掃描 v1.1</strong>
+        <strong>104 履歷掃描 v1.2</strong>
         <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="展開/收合">＋</button>
       </div>
       <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
@@ -235,6 +256,9 @@
     const searchText = [url.searchParams.get("kws"), decodeURIComponent(location.href)].join(" ").toLowerCase();
     if (searchText.includes("java") || searchText.includes("spring")) return "java-programmer";
     if (searchText.includes("c#") || searchText.includes(".net") || searchText.includes("asp.net")) return "csharp-dotnet-programmer";
+    if (searchText.includes("system analyst") || searchText.includes("系統分析") || searchText.includes("sa") || searchText.includes("uml")) return "system-analyst";
+    if (searchText.includes("qa") || searchText.includes("quality assurance") || searchText.includes("test engineer") || searchText.includes("測試")) return "qa-engineer";
+    if (searchText.includes("project manager") || searchText.includes("專案經理") || searchText.includes("專案管理") || searchText.includes("pmp")) return "project-manager";
     return "unknown-role";
   }
 
