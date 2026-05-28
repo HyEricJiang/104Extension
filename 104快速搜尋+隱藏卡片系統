@@ -1,0 +1,572 @@
+// ==UserScript==
+// @name         104 Resume Screening Standalone
+// @namespace    local.resume-screening-system
+// @version      1.1.0
+// @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
+// @match        https://vip.104.com.tw/search/searchResult*
+// @match        https://vip.104.com.tw/search/*
+// @match        https://vip.104.com.tw/*
+// @grant        GM_setClipboard
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  "use strict";
+
+  const CARD_SELECTOR = '[data-qa-id="resumeCard"].vip-resume-card, [data-qa-id="resumeCard"].resume-card';
+  const CODE_SELECTOR = ".resume-card__center .supportInfo-wrap .code, .supportInfo-wrap .code";
+  const PROFILE_LINK_SELECTOR = 'a.name[href], .user-photo a[href]';
+  const EDUCATION_SELECTOR = '[data-qa-id="cardEducation"]';
+  const PREFER_TITLE_SELECTOR = '[data-qa-id="cardPreferJobTitle"]';
+  const WORK_EXPERIENCE_SELECTOR = '[data-qa-id="cardWorkExperience"]';
+  const JOB_HISTORY_SELECTOR = ".content-list li";
+  const PAGE_SIZE = 50;
+  const FAST_SCROLL_DELAY_MS = 90;
+  const BOTTOM_LOAD_WAIT_MS = 2300;
+  const MONTHS_TO_HIDE = 3;
+
+  const ROLE_RULES = {
+    "java-programmer": {
+      name: "Java Software Programmer",
+      hardRequiredAny: ["java"],
+      hardRequiredPreferred: ["spring", "spring boot"],
+      positiveKeywords: ["spring", "spring boot", "java", "vue", "react", "angular", "javascript", "html", "css", "oracle", "mysql", "mssql", "git", "uml", "ooad", "銀行", "電信", "si", "系統整合", "code review", "mentor", "0到1", "專案開發"],
+      negativeIfCurrentMissingAny: ["java", "spring"]
+    },
+    "csharp-dotnet-programmer": {
+      name: "C#.Net Software Programmer",
+      hardRequiredAny: ["c#", ".net", "asp.net"],
+      hardRequiredPreferred: [".net core", ".net 6", "mvc"],
+      positiveKeywords: ["c#", "asp.net", ".net core", ".net 6", "mvc", "mssql", "ms sql", "mysql", "oracle", "vue", "react", "angular", "javascript", "html", "css", "git", "uml", "ooad", "銀行", "電信", "si", "系統整合", "code review", "mentor", "0到1", "專案開發"],
+      negativeIfCurrentMissingAny: ["c#", ".net", "asp.net"]
+    }
+  };
+
+  const GAMBLING_KEYWORDS = ["博弈", "博彩", "娛樂城", "線上賭", "casino", "betting", "gaming platform"];
+  const SOFTWARE_PROJECT_KEYWORDS = ["si", "系統整合", "軟體專案", "專案開發", "web application", "銀行", "電信"];
+  const OVERQUALIFIED_KEYWORDS = ["台大", "清大", "交大", "成大", "政大", "國外大學", "碩士", "博士", "上市", "上櫃", "外商"];
+  const ASSISTANT_STAGNATION_KEYWORDS = ["助理", "副理", "副工程師", "assistant"];
+  const FRONTEND_KEYWORDS = ["vue", "react", "angular", "javascript", "typescript", "html", "css", "jquery"];
+  const DATABASE_KEYWORDS = ["mssql", "ms sql", "sql server", "mysql", "oracle", "postgres", "資料庫", "db"];
+  const ENGINEERING_PROCESS_KEYWORDS = ["git", "版控", "code review", "單元測試", "unit test", "ci/cd", "jira", "敏捷", "agile", "scrum"];
+  const LEADERSHIP_KEYWORDS = ["mentor", "帶新人", "code review", "技術分享", "資深", "senior"];
+  const PROJECT_DEPTH_KEYWORDS = ["0到1", "架構", "導入", "重構", "效能", "api", "後端", "前端", "平台", "系統"];
+
+  let isScanning = false;
+  let panel;
+  let statusNode;
+  let startButton;
+  let copyButton;
+  let toggleButton;
+  let resultNode;
+  let summaryNode;
+  let bodyNode;
+  let skippedCards = new Map();
+  let latestRanked = [];
+  let isCollapsed = true;
+
+  function mountPanel() {
+    if (panel || !document.body) return;
+    panel = document.createElement("div");
+    panel.id = "resume-screening-104-panel";
+    panel.style.cssText = [
+      "position:fixed",
+      "right:18px",
+      "bottom:18px",
+      "z-index:2147483647",
+      "width:360px",
+      "max-height:76vh",
+      "padding:12px",
+      "border:1px solid #e7e0ef",
+      "border-radius:8px",
+      "box-shadow:0 14px 36px rgba(37,48,68,.18)",
+      "background:#fffafc",
+      "color:#273044",
+      "font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif",
+      "overflow:auto"
+    ].join(";");
+
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+        <strong>104 履歷掃描 v1.1</strong>
+        <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="展開/收合">＋</button>
+      </div>
+      <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
+      <div data-screening-status style="margin-bottom:10px;color:#6b7280;font-size:12px;">會跳過有備註或 3 個月內已發出的人選</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button data-screening-start style="flex:1;height:34px;border:1px solid #d9cff8;border-radius:8px;background:#d9cff8;color:#273044;font-weight:700;cursor:pointer;">掃描並顯示前 20 名</button>
+        <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">複製代碼</button>
+      </div>
+      <div data-screening-body style="display:none;">
+        <div data-screening-results style="display:grid;gap:8px;"></div>
+      </div>
+    `;
+    document.body.append(panel);
+
+    statusNode = panel.querySelector("[data-screening-status]");
+    summaryNode = panel.querySelector("[data-screening-summary]");
+    startButton = panel.querySelector("[data-screening-start]");
+    copyButton = panel.querySelector("[data-screening-copy]");
+    toggleButton = panel.querySelector("[data-screening-toggle]");
+    bodyNode = panel.querySelector("[data-screening-body]");
+    resultNode = panel.querySelector("[data-screening-results]");
+    startButton.addEventListener("click", scan);
+    copyButton.addEventListener("click", copyCodes);
+    toggleButton.addEventListener("click", () => setCollapsed(!isCollapsed));
+    setCollapsed(true);
+  }
+
+  function ensurePanel() {
+    mountPanel();
+    if (!panel) setTimeout(ensurePanel, 300);
+  }
+
+  function setStatus(message) {
+    mountPanel();
+    statusNode.textContent = message;
+  }
+
+  function setSummary(message) {
+    mountPanel();
+    summaryNode.textContent = message;
+  }
+
+  function setCollapsed(nextCollapsed) {
+    isCollapsed = nextCollapsed;
+    if (!bodyNode || !toggleButton || !panel) return;
+    bodyNode.style.display = isCollapsed ? "none" : "block";
+    toggleButton.textContent = isCollapsed ? "＋" : "－";
+    panel.style.width = isCollapsed ? "320px" : "420px";
+  }
+
+  function normalizeText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function normalize(value) {
+    return String(value || "").toLowerCase();
+  }
+
+  function includesAny(text, keywords = []) {
+    const normalized = normalize(text);
+    return keywords.some((keyword) => normalized.includes(normalize(keyword)));
+  }
+
+  function countMatches(text, keywords = []) {
+    const normalized = normalize(text);
+    return keywords.filter((keyword) => normalized.includes(normalize(keyword)));
+  }
+
+  function extractResumeCode(value) {
+    const match = normalizeText(value).match(/(?:代碼\s*[：:]?\s*)?(\d{8,})/);
+    return match?.[1] || "";
+  }
+
+  function getCutoffDate() {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - MONTHS_TO_HIDE);
+    cutoff.setHours(0, 0, 0, 0);
+    return cutoff;
+  }
+
+  function parseHistoryDate(text) {
+    const match = text.match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
+    if (!match) return null;
+    const [, year, month, day, hour, minute] = match;
+    return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+  }
+
+  function hasRecentActiveOutreach(card) {
+    const cutoffDate = getCutoffDate();
+    const historyItems = card.querySelectorAll(".history-list__collapse .list-txt");
+    return [...historyItems].some((item) => {
+      const text = item.textContent || "";
+      const historyDate = parseHistoryDate(text);
+      return text.includes("發出") && historyDate && historyDate >= cutoffDate;
+    });
+  }
+
+  function getSkipReason(card) {
+    if (card.querySelector(".resume-remark.mt-2")) return "已有備註";
+    if (hasRecentActiveOutreach(card)) return `近 ${MONTHS_TO_HIDE} 個月已有發出紀錄`;
+    return "";
+  }
+
+  function observedCount(cardsByCode) {
+    return cardsByCode.size + skippedCards.size;
+  }
+
+  function targetReached(cardsByCode, totalCount) {
+    return Boolean(totalCount) && observedCount(cardsByCode) >= totalCount;
+  }
+
+  function progressText(cardsByCode, totalCount) {
+    const observed = observedCount(cardsByCode);
+    const total = totalCount ? `/${totalCount}` : "";
+    return `可分析 ${cardsByCode.size}，跳過 ${skippedCards.size}，已處理 ${observed}${total}`;
+  }
+
+  function hideSkippedCard(card, reason) {
+    card.dataset.resumeScreeningSkipped = reason;
+    card.style.setProperty("display", "none", "important");
+  }
+
+  function filterResumeCards() {
+    const cards = document.querySelectorAll(CARD_SELECTOR);
+    for (const card of cards) {
+      const reason = getSkipReason(card);
+      if (!reason) continue;
+      const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id) || card.id;
+      skippedCards.set(code, reason);
+      hideSkippedCard(card, reason);
+    }
+  }
+
+  function getTotalCount() {
+    const totalText = [...document.querySelectorAll("span, div")]
+      .map((node) => normalizeText(node.textContent))
+      .find((text) => /^共\s*[\d,]+\s*筆$/.test(text));
+    const match = totalText?.match(/共\s*([\d,]+)\s*筆/);
+    return Number(match?.[1]?.replaceAll(",", "") || 0);
+  }
+
+  function inferRoleId() {
+    const url = new URL(location.href);
+    const searchText = [url.searchParams.get("kws"), decodeURIComponent(location.href)].join(" ").toLowerCase();
+    if (searchText.includes("java") || searchText.includes("spring")) return "java-programmer";
+    if (searchText.includes("c#") || searchText.includes(".net") || searchText.includes("asp.net")) return "csharp-dotnet-programmer";
+    return "unknown-role";
+  }
+
+  function parseDurationMonths(text) {
+    if (text.includes("仍在職")) return null;
+    const yearMatch = text.match(/(\d+)\s*年/);
+    const monthMatch = text.match(/(\d+)\s*個月/);
+    return (Number(yearMatch?.[1] || 0) * 12) + Number(monthMatch?.[1] || 0);
+  }
+
+  function deriveStability(jobLines) {
+    const completedDurations = jobLines.map(parseDurationMonths).filter((months) => Number.isFinite(months));
+    return {
+      lastThreeJobsAllUnderOneYear: completedDurations.slice(0, 3).length === 3
+        && completedDurations.slice(0, 3).every((months) => months <= 12),
+      lastTwoJobsBothUnderThreeMonths: completedDurations.slice(0, 2).length === 2
+        && completedDurations.slice(0, 2).every((months) => months < 3)
+    };
+  }
+
+  function extractCard(card) {
+    const codeText = normalizeText(card.querySelector(CODE_SELECTOR)?.textContent);
+    const jobLines = [...card.querySelectorAll(JOB_HISTORY_SELECTOR)].map((item) => normalizeText(item.textContent));
+    const allText = normalizeText(card.textContent);
+    const href = card.querySelector(PROFILE_LINK_SELECTOR)?.getAttribute("href") || "";
+
+    return {
+      resumeCode: extractResumeCode(codeText || card.id),
+      profileUrl: new URL(href, location.origin).toString(),
+      currentTitle: normalizeText(card.querySelector(PREFER_TITLE_SELECTOR)?.textContent).replace(/^希望職稱\s*[：:]?\s*/, ""),
+      summary: allText,
+      experienceText: jobLines.join(" | "),
+      education: normalizeText(card.querySelector(EDUCATION_SELECTOR)?.textContent),
+      workExperience: normalizeText(card.querySelector(WORK_EXPERIENCE_SELECTOR)?.textContent),
+      hasProjectAchievement: /專案|系統|平台|開發|導入|架構|後端|前端|api|db|database|spring|\.net|mssql|mysql|oracle|銀行|電信/i.test(allText),
+      recentGapMonths: 0,
+      repeatedShortGaps: false,
+      autobiographyMostlyPersonal: false,
+      sameLevelYears: 0,
+      ...deriveStability(jobLines)
+    };
+  }
+
+  function buildText(card) {
+    return [card.resumeCode, card.currentTitle, card.summary, card.experienceText, card.education].join(" ");
+  }
+
+  function recentExperienceText(card, take = 3) {
+    const lines = String(card.experienceText || "").split("|").map((line) => line.trim()).filter(Boolean);
+    return [card.currentTitle, ...lines.slice(0, take), card.summary].join(" ");
+  }
+
+  function parseWorkYears(card) {
+    const text = [card.workExperience, card.summary].join(" ");
+    const range = text.match(/(\d+)\s*~\s*(\d+)\s*年工作經驗/);
+    if (range) return (Number(range[1]) + Number(range[2])) / 2;
+    const exact = text.match(/(\d+)\s*年工作經驗/);
+    return exact ? Number(exact[1]) : 0;
+  }
+
+  function addFactor(factors, label, points, details = "") {
+    if (!points) return 0;
+    factors.push({ label, points, details });
+    return points;
+  }
+
+  function hardRejectReasons(role, card, text) {
+    const reasons = [];
+    if (includesAny(text, GAMBLING_KEYWORDS)) reasons.push("博弈/博彩/娛樂城相關公司，直接排除");
+    const recentWorkText = recentExperienceText(card, 2);
+    if ((role.negativeIfCurrentMissingAny || []).length && !includesAny(recentWorkText, role.negativeIfCurrentMissingAny)) {
+      reasons.push("近期工作內容未顯示核心技術，直接排除");
+    }
+    if (card.lastThreeJobsAllUnderOneYear) reasons.push("近三份工作皆一年或不滿一年，直接排除");
+    if (card.lastTwoJobsBothUnderThreeMonths) reasons.push("近兩份工作皆不滿三個月，直接排除");
+    return reasons;
+  }
+
+  function scoreCard(role, card) {
+    const text = buildText(card);
+    const rejectedReasons = hardRejectReasons(role, card, text);
+    if (rejectedReasons.length) {
+      return { resumeCode: card.resumeCode, profileUrl: card.profileUrl || "", score: 0, status: "excluded", reasons: rejectedReasons };
+    }
+
+    const factors = [];
+    let score = 35;
+    const recentText = recentExperienceText(card, 2);
+    const workYears = parseWorkYears(card);
+
+    const coreMatches = countMatches(recentText, role.hardRequiredAny || []);
+    score += addFactor(factors, "核心技術", Math.min(18, coreMatches.length * 12), coreMatches.join("、"));
+    const preferredMatches = countMatches(text, role.hardRequiredPreferred || []);
+    score += addFactor(factors, "框架/進階技術", Math.min(12, preferredMatches.length * 6), preferredMatches.join("、"));
+    const roleMatches = countMatches(text, role.positiveKeywords || []);
+    score += addFactor(factors, "職位關鍵字覆蓋", Math.min(12, roleMatches.length * 1.2), roleMatches.slice(0, 10).join("、"));
+    score += addFactor(factors, "資料庫經驗", Math.min(8, countMatches(text, DATABASE_KEYWORDS).length * 3), countMatches(text, DATABASE_KEYWORDS).join("、"));
+    score += addFactor(factors, "前端/全端廣度", Math.min(6, countMatches(text, FRONTEND_KEYWORDS).length * 1.5), countMatches(text, FRONTEND_KEYWORDS).slice(0, 6).join("、"));
+    score += addFactor(factors, "工程流程成熟度", Math.min(6, countMatches(text, ENGINEERING_PROCESS_KEYWORDS).length * 2), countMatches(text, ENGINEERING_PROCESS_KEYWORDS).join("、"));
+    score += addFactor(factors, "資深/帶人訊號", Math.min(5, countMatches(text, LEADERSHIP_KEYWORDS).length * 2), countMatches(text, LEADERSHIP_KEYWORDS).join("、"));
+    score += addFactor(factors, "專案深度", Math.min(7, countMatches(text, PROJECT_DEPTH_KEYWORDS).length * 1.5), countMatches(text, PROJECT_DEPTH_KEYWORDS).slice(0, 6).join("、"));
+    score += addFactor(factors, "產業/專案背景", Math.min(7, countMatches(text, SOFTWARE_PROJECT_KEYWORDS).length * 2.5), countMatches(text, SOFTWARE_PROJECT_KEYWORDS).join("、"));
+
+    if (workYears >= 3 && workYears <= 8) score += addFactor(factors, "年資區間", 5, `${workYears} 年，落在理想區間`);
+    else if (workYears > 8 && workYears <= 13) score += addFactor(factors, "年資區間", 3, `${workYears} 年，資深但仍可評估`);
+    else if (workYears > 0) score += addFactor(factors, "年資區間", 1, `${workYears} 年`);
+
+    if (includesAny(text, OVERQUALIFIED_KEYWORDS)) {
+      score -= 8;
+      addFactor(factors, "過於優秀風險", -8, "學歷或公司背景過於優秀");
+    }
+    if (includesAny(text, ASSISTANT_STAGNATION_KEYWORDS) && card.sameLevelYears >= 5) {
+      score -= 6;
+      addFactor(factors, "特殊職涯狀況", -6, "助理/副職級停留超過 5 年");
+    }
+
+    return {
+      resumeCode: card.resumeCode,
+      profileUrl: card.profileUrl || "",
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      status: "ranked",
+      reasons: factors
+        .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
+        .map((factor) => `${factor.label} ${factor.points > 0 ? "+" : ""}${Math.round(factor.points)}：${factor.details}`)
+        .slice(0, 8)
+    };
+  }
+
+  function rankCandidates(cards) {
+    const role = ROLE_RULES[inferRoleId()] || {
+      name: "Unknown Role",
+      hardRequiredAny: [],
+      hardRequiredPreferred: [],
+      positiveKeywords: [],
+      negativeIfCurrentMissingAny: []
+    };
+    return cards
+      .map((card) => scoreCard(role, card))
+      .filter((item) => item.status !== "excluded")
+      .sort((a, b) => b.score - a.score || a.resumeCode.localeCompare(b.resumeCode))
+      .slice(0, 20);
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function waitForCards() {
+    for (let index = 0; index < 60; index += 1) {
+      if (document.querySelector(CARD_SELECTOR)) {
+        filterResumeCards();
+        return;
+      }
+      await sleep(500);
+    }
+    throw new Error("等不到履歷卡片");
+  }
+
+  function currentCodeSignature() {
+    return [...document.querySelectorAll(CODE_SELECTOR)].map((node) => extractResumeCode(node.textContent)).filter(Boolean).join("|");
+  }
+
+  function isNearBottom() {
+    return window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 120;
+  }
+
+  function collectVisibleCards(cardsByCode) {
+    filterResumeCards();
+    const pageCards = [...document.querySelectorAll(`${CARD_SELECTOR}:not([data-resume-screening-skipped])`)].map(extractCard);
+    for (const card of pageCards) {
+      if (card.resumeCode) cardsByCode.set(card.resumeCode, card);
+    }
+    return pageCards.length;
+  }
+
+  async function fastScrollToBottom(cardsByCode, totalCount) {
+    let lastScrollY = -1;
+    let stuckRounds = 0;
+    while (!isNearBottom() && stuckRounds < 4 && !targetReached(cardsByCode, totalCount)) {
+      collectVisibleCards(cardsByCode);
+      window.scrollTo(0, Math.min(document.documentElement.scrollHeight, window.scrollY + Math.max(window.innerHeight * 2.8, 2200)));
+      await sleep(FAST_SCROLL_DELAY_MS);
+      if (Math.abs(window.scrollY - lastScrollY) < 8) stuckRounds += 1;
+      else stuckRounds = 0;
+      lastScrollY = window.scrollY;
+    }
+    collectVisibleCards(cardsByCode);
+  }
+
+  async function scrollUntilStable(cardsByCode, totalCount) {
+    let previousSize = -1;
+    let stableRounds = 0;
+    while (stableRounds < 3 && !targetReached(cardsByCode, totalCount)) {
+      await fastScrollToBottom(cardsByCode, totalCount);
+      const beforeWaitSize = cardsByCode.size;
+      setStatus(`快速到頁尾，等待下一批...${progressText(cardsByCode, totalCount)}`);
+      await sleep(BOTTOM_LOAD_WAIT_MS);
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await sleep(FAST_SCROLL_DELAY_MS);
+      collectVisibleCards(cardsByCode);
+      if (cardsByCode.size === beforeWaitSize && cardsByCode.size === previousSize) stableRounds += 1;
+      else stableRounds = 0;
+      previousSize = cardsByCode.size;
+    }
+  }
+
+  function currentPageNumber() {
+    const href = document.querySelector(PROFILE_LINK_SELECTOR)?.getAttribute("href") || "";
+    const match = decodeURIComponent(href).match(/"page"\s*:\s*(\d+)/);
+    return Number(match?.[1] || 1);
+  }
+
+  function findNextButton() {
+    const nextPage = String(currentPageNumber() + 1);
+    const scoped = [...document.querySelectorAll(".pagination button, .pagination a, .pager button, .pager a, [class*='page'] button, [class*='page'] a")];
+    const candidates = scoped.length ? scoped : [...document.querySelectorAll("button, a")];
+    const usable = (element) => !element.disabled && element.getAttribute("aria-disabled") !== "true" && !element.classList.contains("disabled") && !element.closest(".resume-card");
+    return candidates.find((element) => usable(element) && normalizeText(element.textContent) === nextPage)
+      || candidates.find((element) => usable(element) && /下一頁|下頁|>|›/.test(`${normalizeText(element.textContent)} ${normalizeText(element.getAttribute("aria-label"))}`));
+  }
+
+  async function goNextPage() {
+    const nextButton = findNextButton();
+    if (!nextButton) return false;
+    const beforeCodes = currentCodeSignature();
+    setStatus(`切換到第 ${currentPageNumber() + 1} 頁，等待 104 回應...`);
+    nextButton.scrollIntoView({ block: "center" });
+    await sleep(500);
+    nextButton.click();
+    await sleep(2500);
+    for (let index = 0; index < 60; index += 1) {
+      if (currentCodeSignature() && currentCodeSignature() !== beforeCodes) return true;
+      await sleep(500);
+    }
+    return true;
+  }
+
+  async function waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount) {
+    for (let index = 0; index < 4; index += 1) {
+      setStatus(`等待下一批資料...${progressText(cardsByCode, totalCount)}`);
+      await sleep(700);
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      collectVisibleCards(cardsByCode);
+      if (currentCodeSignature() && currentCodeSignature() !== beforeSignature) return true;
+      if (targetReached(cardsByCode, totalCount)) return true;
+    }
+    return false;
+  }
+
+  function renderResults(scannedCount) {
+    resultNode.innerHTML = latestRanked.length ? latestRanked.map((item, index) => `
+      <article style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:8px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;">
+          <a href="${item.profileUrl}" target="_blank" rel="noreferrer" style="font-weight:800;color:#5d4fb4;text-decoration:none;">${index + 1}. ${item.resumeCode}</a>
+          <strong style="background:#ffd7c2;border-radius:8px;padding:2px 8px;">${item.score}</strong>
+        </div>
+        <ul style="margin:6px 0 0;padding-left:18px;color:#6b7280;font-size:12px;">${item.reasons.slice(0, 4).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+      </article>
+    `).join("") : `<div style="color:#6b7280;">沒有符合條件的候選人</div>`;
+    setSummary(`完成：前 ${latestRanked.length} 名 · 掃描 ${scannedCount} · 跳過 ${skippedCards.size}`);
+    setStatus("按「＋」展開查看原因；按「複製代碼」複製前 20 名");
+    setCollapsed(true);
+  }
+
+  function escapeHtml(value) {
+    return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  }
+
+  function copyCodes() {
+    const codes = latestRanked.map((item) => item.resumeCode).join("\n");
+    if (!codes) {
+      setStatus("目前沒有可複製的履歷代碼");
+      return;
+    }
+    GM_setClipboard(codes);
+    setStatus(`已複製 ${latestRanked.length} 筆履歷代碼`);
+    setSummary(`已複製 ${latestRanked.length} 筆代碼`);
+  }
+
+  async function scan() {
+    mountPanel();
+    if (isScanning) return;
+    isScanning = true;
+    startButton.disabled = true;
+    skippedCards = new Map();
+    latestRanked = [];
+    resultNode.innerHTML = "";
+    setCollapsed(true);
+
+    const cardsByCode = new Map();
+    const totalCount = getTotalCount();
+    const expectedPages = totalCount ? Math.ceil(totalCount / PAGE_SIZE) : 30;
+    let batch = 1;
+    let noGrowthRounds = 0;
+
+    try {
+      while (batch <= expectedPages + 3 && !targetReached(cardsByCode, totalCount)) {
+        const beforeSize = cardsByCode.size;
+        const beforeSignature = currentCodeSignature();
+        const progress = progressText(cardsByCode, totalCount);
+        setSummary(progress);
+        setStatus(`連續掃描中...${progress}`);
+        await waitForCards();
+        await scrollUntilStable(cardsByCode, totalCount);
+        if (targetReached(cardsByCode, totalCount)) break;
+        const autoGenerated = await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
+        if (!autoGenerated && !targetReached(cardsByCode, totalCount)) {
+          const hasNext = await goNextPage();
+          if (!hasNext) break;
+        }
+        if (cardsByCode.size <= beforeSize) noGrowthRounds += 1;
+        else noGrowthRounds = 0;
+        if (noGrowthRounds >= 3) break;
+        batch += 1;
+      }
+
+      const cards = [...cardsByCode.values()];
+      latestRanked = rankCandidates(cards);
+      renderResults(cards.length);
+    } catch (error) {
+      console.error(error);
+      setStatus(`失敗：${error.message}`);
+    } finally {
+      isScanning = false;
+      startButton.disabled = false;
+    }
+  }
+
+  ensurePanel();
+
+  const observer = new MutationObserver(() => filterResumeCards());
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+})();
