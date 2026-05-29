@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         104 Resume Screening Standalone
 // @namespace    local.resume-screening-system
-// @version      1.5.0
+// @version      2.2.0
 // @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
+// @grant        GM_openInTab
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -22,6 +23,7 @@
   const FAST_SCROLL_DELAY_MS = 90;
   const BOTTOM_LOAD_WAIT_MS = 2300;
   const MONTHS_TO_HIDE = 3;
+  const PANEL_POSITION_KEY = "resume-screening-104-panel-position";
 
   const ROLE_RULES = {
     "java-programmer": {
@@ -81,7 +83,10 @@
   let toggleButton;
   let resultNode;
   let summaryNode;
+  let progressFillNode;
+  let progressLabelNode;
   let bodyNode;
+  let headerNode;
   let skippedCards = new Map();
   let latestRanked = [];
   let isCollapsed = true;
@@ -92,6 +97,8 @@
     panel.id = "resume-screening-104-panel";
     panel.style.cssText = [
       "position:fixed",
+      "left:auto",
+      "top:auto",
       "right:18px",
       "bottom:18px",
       "z-index:2147483647",
@@ -108,15 +115,24 @@
     ].join(";");
 
     panel.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
-        <strong>104 履歷掃描 v1.5</strong>
+      <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
+        <strong>104 履歷掃描 v2.2</strong>
         <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="展開/收合">＋</button>
       </div>
       <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
+      <div style="margin-bottom:8px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;color:#6b7280;font-size:11px;">
+          <span>掃描進度</span>
+          <span data-screening-progress-label>0%</span>
+        </div>
+        <div style="height:8px;border-radius:999px;background:#f0edf7;overflow:hidden;border:1px solid #e7e0ef;">
+          <div data-screening-progress-fill style="width:0%;height:100%;border-radius:999px;background:linear-gradient(90deg,#b8eadc,#d9cff8,#ffd7c2);transition:width .22s ease;"></div>
+        </div>
+      </div>
       <div data-screening-status style="margin-bottom:10px;color:#6b7280;font-size:12px;">會跳過有備註或 3 個月內已發出的人選</div>
       <div style="display:flex;gap:8px;margin-bottom:10px;">
         <button data-screening-start style="flex:1;height:34px;border:1px solid #d9cff8;border-radius:8px;background:#d9cff8;color:#273044;font-weight:700;cursor:pointer;">掃描並顯示前 20 名</button>
-        <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">複製代碼</button>
+        <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">開啟履歷</button>
       </div>
       <div data-screening-body style="display:none;">
         <div data-screening-results style="display:grid;gap:8px;"></div>
@@ -126,15 +142,20 @@
 
     statusNode = panel.querySelector("[data-screening-status]");
     summaryNode = panel.querySelector("[data-screening-summary]");
+    progressFillNode = panel.querySelector("[data-screening-progress-fill]");
+    progressLabelNode = panel.querySelector("[data-screening-progress-label]");
     startButton = panel.querySelector("[data-screening-start]");
     copyButton = panel.querySelector("[data-screening-copy]");
     toggleButton = panel.querySelector("[data-screening-toggle]");
     bodyNode = panel.querySelector("[data-screening-body]");
     resultNode = panel.querySelector("[data-screening-results]");
+    headerNode = panel.querySelector("[data-screening-header]");
     startButton.addEventListener("click", scan);
-    copyButton.addEventListener("click", copyCodes);
+    copyButton.addEventListener("click", openRankedProfiles);
     toggleButton.addEventListener("click", () => setCollapsed(!isCollapsed));
+    enablePanelDrag();
     setCollapsed(true);
+    applySavedPanelPosition();
   }
 
   function ensurePanel() {
@@ -152,12 +173,90 @@
     summaryNode.textContent = message;
   }
 
+  function setProgress(percent, label = "") {
+    mountPanel();
+    const nextPercent = clamp(Number(percent) || 0, 0, 100);
+    if (progressFillNode) progressFillNode.style.width = `${nextPercent}%`;
+    if (progressLabelNode) progressLabelNode.textContent = label || `${Math.round(nextPercent)}%`;
+  }
+
   function setCollapsed(nextCollapsed) {
     isCollapsed = nextCollapsed;
     if (!bodyNode || !toggleButton || !panel) return;
     bodyNode.style.display = isCollapsed ? "none" : "block";
     toggleButton.textContent = isCollapsed ? "＋" : "－";
     panel.style.width = isCollapsed ? "320px" : "420px";
+    keepPanelInViewport();
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  function getPanelRectFromStorage() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(PANEL_POSITION_KEY) || "null");
+      if (!saved || !Number.isFinite(saved.left) || !Number.isFinite(saved.top)) return null;
+      return saved;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function setPanelPosition(left, top) {
+    if (!panel) return;
+    const margin = 8;
+    const rect = panel.getBoundingClientRect();
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    const nextLeft = clamp(left, margin, maxLeft);
+    const nextTop = clamp(top, margin, maxTop);
+    panel.style.left = `${nextLeft}px`;
+    panel.style.top = `${nextTop}px`;
+    panel.style.right = "auto";
+    panel.style.bottom = "auto";
+    localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify({ left: nextLeft, top: nextTop }));
+  }
+
+  function applySavedPanelPosition() {
+    const saved = getPanelRectFromStorage();
+    if (!saved) return;
+    requestAnimationFrame(() => setPanelPosition(saved.left, saved.top));
+  }
+
+  function keepPanelInViewport() {
+    if (!panel || panel.style.left === "auto" || !panel.style.left) return;
+    requestAnimationFrame(() => {
+      const rect = panel.getBoundingClientRect();
+      setPanelPosition(rect.left, rect.top);
+    });
+  }
+
+  function enablePanelDrag() {
+    if (!headerNode || !panel) return;
+    let dragState = null;
+    headerNode.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest("button")) return;
+      const rect = panel.getBoundingClientRect();
+      dragState = {
+        pointerId: event.pointerId,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top
+      };
+      headerNode.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    headerNode.addEventListener("pointermove", (event) => {
+      if (!dragState || dragState.pointerId !== event.pointerId) return;
+      setPanelPosition(event.clientX - dragState.offsetX, event.clientY - dragState.offsetY);
+    });
+    const endDrag = (event) => {
+      if (!dragState || dragState.pointerId !== event.pointerId) return;
+      dragState = null;
+    };
+    headerNode.addEventListener("pointerup", endDrag);
+    headerNode.addEventListener("pointercancel", endDrag);
+    window.addEventListener("resize", keepPanelInViewport);
   }
 
   function normalizeText(value) {
@@ -232,23 +331,37 @@
     return "";
   }
 
-  function observedCount(cardsByCode) {
+  function processedCount(cardsByCode) {
     return cardsByCode.size + skippedCards.size;
   }
 
+  function targetScannableCount(totalCount) {
+    return totalCount ? Math.max(totalCount - skippedCards.size, 0) : 0;
+  }
+
   function targetReached(cardsByCode, totalCount) {
-    return Boolean(totalCount) && observedCount(cardsByCode) >= totalCount;
+    if (!totalCount) return false;
+    return cardsByCode.size >= targetScannableCount(totalCount) || processedCount(cardsByCode) >= totalCount;
   }
 
   function progressText(cardsByCode, totalCount) {
-    const observed = observedCount(cardsByCode);
-    const total = totalCount ? `/${totalCount}` : "";
-    return `可分析 ${cardsByCode.size}，跳過 ${skippedCards.size}，已處理 ${observed}${total}`;
+    if (!totalCount) return `可分析 ${cardsByCode.size}，跳過 ${skippedCards.size}`;
+    return `可分析 ${cardsByCode.size}/${targetScannableCount(totalCount)}，跳過 ${skippedCards.size}，原始 ${totalCount}`;
+  }
+
+  function progressPercent(cardsByCode, totalCount) {
+    if (!totalCount) return Math.min(95, cardsByCode.size ? 12 : 0);
+    return Math.min(100, Math.round((processedCount(cardsByCode) / totalCount) * 100));
   }
 
   function hideSkippedCard(card, reason) {
     card.dataset.resumeScreeningSkipped = reason;
     card.style.setProperty("display", "none", "important");
+  }
+
+  function rememberSkippedCard(card, reason) {
+    const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id) || card.id;
+    if (code) skippedCards.set(code, reason);
   }
 
   function filterResumeCards() {
@@ -258,10 +371,9 @@
     }
     const cards = document.querySelectorAll(CARD_SELECTOR);
     for (const card of cards) {
-      const reason = getSkipReason(card);
+      const reason = card.dataset.resumeScreeningSkipped || getSkipReason(card);
       if (!reason) continue;
-      const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id) || card.id;
-      skippedCards.set(code, reason);
+      rememberSkippedCard(card, reason);
       hideSkippedCard(card, reason);
     }
   }
@@ -413,17 +525,28 @@
   function hardRejectReasons(role, card, text) {
     const reasons = [];
     if (includesAny(text, GAMBLING_KEYWORDS)) reasons.push("博弈/博彩/娛樂城相關公司，直接排除");
+    if (card.lastThreeJobsAllUnderOneYear) reasons.push("近三份工作皆一年或不滿一年，直接排除");
+    if (card.lastTwoJobsBothUnderThreeMonths) reasons.push("近兩份工作皆不滿三個月，直接排除");
+    return reasons;
+  }
+
+  function coreMismatchPenalty(role, card) {
     const focusedText = roleFocusedText(card, 4);
     const coreCompetencyMatches = countMatches(focusedText, role.coreCompetencyKeywords || []);
     const minimumCoreMatches = role.minimumCoreMatches || 0;
     if (minimumCoreMatches && coreCompetencyMatches.length < minimumCoreMatches) {
-      reasons.push(`未命中足夠${role.name || "職位"}核心職能（需 ${minimumCoreMatches} 項，命中 ${coreCompetencyMatches.length} 項），直接排除`);
-    } else if ((role.negativeIfCurrentMissingAny || []).length && !includesAny(focusedText, role.negativeIfCurrentMissingAny)) {
-      reasons.push("近期工作內容未顯示核心技術，直接排除");
+      return {
+        points: coreCompetencyMatches.length ? -8 : -14,
+        details: `需 ${minimumCoreMatches} 項核心職能，命中 ${coreCompetencyMatches.length} 項`
+      };
     }
-    if (card.lastThreeJobsAllUnderOneYear) reasons.push("近三份工作皆一年或不滿一年，直接排除");
-    if (card.lastTwoJobsBothUnderThreeMonths) reasons.push("近兩份工作皆不滿三個月，直接排除");
-    return reasons;
+    if ((role.negativeIfCurrentMissingAny || []).length && !includesAny(focusedText, role.negativeIfCurrentMissingAny)) {
+      return {
+        points: -12,
+        details: "近期職稱與前幾段經歷未顯示核心技術"
+      };
+    }
+    return null;
   }
 
   function scoreCard(role, card) {
@@ -434,19 +557,23 @@
     }
 
     const factors = [];
-    let score = 35;
+    let score = 48;
     const recentText = recentExperienceText(card, 2);
     const focusedText = roleFocusedText(card, 4);
     const workYears = parseWorkYears(card);
 
     const competencyMatches = countMatches(focusedText, role.coreCompetencyKeywords || []);
-    score += addFactor(factors, "職務核心職能", Math.min(24, competencyMatches.length * 5), competencyMatches.slice(0, 8).join("、"));
+    score += addFactor(factors, "職務核心職能", Math.min(24, competencyMatches.length * 6), competencyMatches.slice(0, 8).join("、"));
     const coreMatches = countMatches(focusedText, role.hardRequiredAny || []);
-    score += addFactor(factors, "核心技術", Math.min(18, coreMatches.length * 12), coreMatches.join("、"));
+    score += addFactor(factors, "核心技術", Math.min(20, coreMatches.length * 14), coreMatches.join("、"));
+    const corePenalty = coreMismatchPenalty(role, card);
+    if (corePenalty) {
+      score += addFactor(factors, "核心職能不足", corePenalty.points, corePenalty.details);
+    }
     const preferredMatches = countMatches(text, role.hardRequiredPreferred || []);
-    score += addFactor(factors, "框架/進階技術", Math.min(12, preferredMatches.length * 6), preferredMatches.join("、"));
+    score += addFactor(factors, "框架/進階技術", Math.min(14, preferredMatches.length * 7), preferredMatches.join("、"));
     const roleMatches = countMatches(text, role.positiveKeywords || []);
-    score += addFactor(factors, "職位關鍵字覆蓋", Math.min(12, roleMatches.length * 1.2), roleMatches.slice(0, 10).join("、"));
+    score += addFactor(factors, "職位關鍵字覆蓋", Math.min(14, roleMatches.length * 1.6), roleMatches.slice(0, 10).join("、"));
     score += addFactor(factors, "資料庫經驗", Math.min(8, countMatches(text, DATABASE_KEYWORDS).length * 3), countMatches(text, DATABASE_KEYWORDS).join("、"));
     score += addFactor(factors, "前端/全端廣度", Math.min(6, countMatches(text, FRONTEND_KEYWORDS).length * 1.5), countMatches(text, FRONTEND_KEYWORDS).slice(0, 6).join("、"));
     score += addFactor(factors, "工程流程成熟度", Math.min(6, countMatches(text, ENGINEERING_PROCESS_KEYWORDS).length * 2), countMatches(text, ENGINEERING_PROCESS_KEYWORDS).join("、"));
@@ -502,11 +629,19 @@
       positiveKeywords: [],
       negativeIfCurrentMissingAny: []
     };
-    return cards
-      .map((card) => scoreCard(role, card))
+    const scored = cards.map((card) => scoreCard(role, card));
+    const excludedItems = scored.filter((item) => item.status === "excluded");
+    const excludedCount = excludedItems.length;
+    const excludedReasonCounts = excludedItems.reduce((counts, item) => {
+      const reason = item.reasons[0] || "其他硬排除";
+      counts[reason] = (counts[reason] || 0) + 1;
+      return counts;
+    }, {});
+    const ranked = scored
       .filter((item) => item.status !== "excluded")
       .sort((a, b) => b.score - a.score || a.resumeCode.localeCompare(b.resumeCode))
       .slice(0, 20);
+    return { ranked, excludedCount, excludedReasonCounts, scoredCount: scored.length };
   }
 
   function sleep(ms) {
@@ -543,34 +678,52 @@
     return pageCards.length;
   }
 
+  function collectAndUpdateProgress(cardsByCode, totalCount) {
+    const count = collectVisibleCards(cardsByCode);
+    setSummary(progressText(cardsByCode, totalCount));
+    setProgress(progressPercent(cardsByCode, totalCount));
+    return count;
+  }
+
+  async function prepareScanPosition(cardsByCode) {
+    filterResumeCards();
+    collectVisibleCards(cardsByCode);
+    if (window.scrollY <= 40) return;
+    setStatus("重新從頁首掃描，避免在頁尾空等...");
+    window.scrollTo(0, 0);
+    await sleep(900);
+    collectVisibleCards(cardsByCode);
+  }
+
   async function fastScrollToBottom(cardsByCode, totalCount) {
     let lastScrollY = -1;
     let stuckRounds = 0;
     while (!isNearBottom() && stuckRounds < 4 && !targetReached(cardsByCode, totalCount)) {
-      collectVisibleCards(cardsByCode);
+      collectAndUpdateProgress(cardsByCode, totalCount);
       window.scrollTo(0, Math.min(document.documentElement.scrollHeight, window.scrollY + Math.max(window.innerHeight * 2.8, 2200)));
       await sleep(FAST_SCROLL_DELAY_MS);
       if (Math.abs(window.scrollY - lastScrollY) < 8) stuckRounds += 1;
       else stuckRounds = 0;
       lastScrollY = window.scrollY;
     }
-    collectVisibleCards(cardsByCode);
+    collectAndUpdateProgress(cardsByCode, totalCount);
   }
 
   async function scrollUntilStable(cardsByCode, totalCount) {
-    let previousSize = -1;
+    let previousProcessed = -1;
     let stableRounds = 0;
     while (stableRounds < 3 && !targetReached(cardsByCode, totalCount)) {
       await fastScrollToBottom(cardsByCode, totalCount);
-      const beforeWaitSize = cardsByCode.size;
+      const beforeWaitProcessed = processedCount(cardsByCode);
       setStatus(`快速到頁尾，等待下一批...${progressText(cardsByCode, totalCount)}`);
       await sleep(BOTTOM_LOAD_WAIT_MS);
       window.scrollTo(0, document.documentElement.scrollHeight);
       await sleep(FAST_SCROLL_DELAY_MS);
-      collectVisibleCards(cardsByCode);
-      if (cardsByCode.size === beforeWaitSize && cardsByCode.size === previousSize) stableRounds += 1;
+      collectAndUpdateProgress(cardsByCode, totalCount);
+      const currentProcessed = processedCount(cardsByCode);
+      if (currentProcessed === beforeWaitProcessed && currentProcessed === previousProcessed) stableRounds += 1;
       else stableRounds = 0;
-      previousSize = cardsByCode.size;
+      previousProcessed = currentProcessed;
     }
   }
 
@@ -602,7 +755,7 @@
       if (currentCodeSignature() && currentCodeSignature() !== beforeCodes) return true;
       await sleep(500);
     }
-    return true;
+    return false;
   }
 
   async function waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount) {
@@ -610,14 +763,31 @@
       setStatus(`等待下一批資料...${progressText(cardsByCode, totalCount)}`);
       await sleep(700);
       window.scrollTo(0, document.documentElement.scrollHeight);
-      collectVisibleCards(cardsByCode);
+      collectAndUpdateProgress(cardsByCode, totalCount);
       if (currentCodeSignature() && currentCodeSignature() !== beforeSignature) return true;
       if (targetReached(cardsByCode, totalCount)) return true;
     }
     return false;
   }
 
-  function renderResults(scannedCount) {
+  async function scanSinglePage(cardsByCode, totalCount) {
+    setStatus(`單頁掃描中...${progressText(cardsByCode, totalCount)}`);
+    collectAndUpdateProgress(cardsByCode, totalCount);
+    await fastScrollToBottom(cardsByCode, totalCount);
+    await sleep(500);
+    collectAndUpdateProgress(cardsByCode, totalCount);
+    setSummary(progressText(cardsByCode, totalCount));
+  }
+
+  function renderResults(scanStats) {
+    const scannedCount = scanStats?.scannedCount || 0;
+    const excludedCount = scanStats?.excludedCount || 0;
+    const excludedReasonCounts = scanStats?.excludedReasonCounts || {};
+    const excludedReasonSummary = Object.entries(excludedReasonCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2)
+      .map(([reason, count]) => `${reason.replace("，直接排除", "")} ${count}`)
+      .join("；");
     resultNode.innerHTML = latestRanked.length ? latestRanked.map((item, index) => `
       <article style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:8px;">
         <div style="display:flex;justify-content:space-between;gap:8px;">
@@ -627,8 +797,12 @@
         <ul style="margin:6px 0 0;padding-left:18px;color:#6b7280;font-size:12px;">${item.reasons.slice(0, 4).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
       </article>
     `).join("") : `<div style="color:#6b7280;">沒有符合條件的候選人</div>`;
-    setSummary(`完成：前 ${latestRanked.length} 名 · 掃描 ${scannedCount} · 跳過 ${skippedCards.size}`);
-    setStatus("按「＋」展開查看原因；按「複製代碼」複製前 20 名");
+    setSummary(`完成：入榜 ${latestRanked.length} · 可分析 ${scannedCount} · 硬排除 ${excludedCount} · 跳過 ${skippedCards.size}`);
+    setProgress(100, "完成");
+    const shortageNote = latestRanked.length < 20
+      ? `本次少於 20 筆，多半是可分析卡片不足或 ${excludedCount} 筆被硬性排除。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
+      : "按「＋」展開查看原因；按「開啟履歷」批次開啟前 20 名";
+    setStatus(shortageNote);
     setCollapsed(true);
   }
 
@@ -636,15 +810,26 @@
     return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
   }
 
-  function copyCodes() {
-    const codes = latestRanked.map((item) => item.resumeCode).join("\n");
-    if (!codes) {
-      setStatus("目前沒有可複製的履歷代碼");
+  async function openRankedProfiles() {
+    const profiles = latestRanked.filter((item) => item.profileUrl);
+    if (!profiles.length) {
+      setStatus("目前沒有可開啟的履歷");
       return;
     }
-    GM_setClipboard(codes);
-    setStatus(`已複製 ${latestRanked.length} 筆履歷代碼`);
-    setSummary(`已複製 ${latestRanked.length} 筆代碼`);
+    copyButton.disabled = true;
+    setStatus(`準備開啟 ${profiles.length} 個履歷分頁。Tampermonkey 無法自動命名 Chrome 分頁群組，請手動群組為「待看履歷」。`);
+    for (const [index, item] of profiles.entries()) {
+      GM_openInTab(item.profileUrl, {
+        active: index === 0,
+        insert: true,
+        setParent: true
+      });
+      setSummary(`已開啟 ${index + 1}/${profiles.length} 個履歷分頁`);
+      setProgress(Math.round(((index + 1) / profiles.length) * 100), `${index + 1}/${profiles.length}`);
+      await sleep(180);
+    }
+    setStatus(`已開啟 ${profiles.length} 個履歷分頁；可在 Chrome 分頁列手動加入群組「待看履歷」。`);
+    copyButton.disabled = false;
   }
 
   async function scan() {
@@ -656,40 +841,52 @@
     latestRanked = [];
     resultNode.innerHTML = "";
     setCollapsed(true);
+    setProgress(0);
 
     const cardsByCode = new Map();
-    const totalCount = getTotalCount();
-    const expectedPages = totalCount ? Math.ceil(totalCount / PAGE_SIZE) : 30;
     let batch = 1;
     let noGrowthRounds = 0;
 
     try {
-      while (batch <= expectedPages + 3 && !targetReached(cardsByCode, totalCount)) {
-        const beforeSize = cardsByCode.size;
-        const beforeSignature = currentCodeSignature();
-        const progress = progressText(cardsByCode, totalCount);
-        setSummary(progress);
-        setStatus(`連續掃描中...${progress}`);
-        await waitForCards();
-        await scrollUntilStable(cardsByCode, totalCount);
-        if (targetReached(cardsByCode, totalCount)) break;
-        const autoGenerated = await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
-        if (!autoGenerated && !targetReached(cardsByCode, totalCount)) {
-          const hasNext = await goNextPage();
-          if (!hasNext) break;
+      await waitForCards();
+      await prepareScanPosition(cardsByCode);
+      const totalCount = getTotalCount();
+      const expectedPages = totalCount ? Math.ceil(totalCount / PAGE_SIZE) : 30;
+      if (totalCount && totalCount <= PAGE_SIZE) {
+        await scanSinglePage(cardsByCode, totalCount);
+      } else {
+        while (batch <= expectedPages + 3 && !targetReached(cardsByCode, totalCount)) {
+          const beforeProcessed = processedCount(cardsByCode);
+          const beforeSignature = currentCodeSignature();
+          const progress = progressText(cardsByCode, totalCount);
+          setSummary(progress);
+          setStatus(`連續掃描中...${progress}`);
+          await scrollUntilStable(cardsByCode, totalCount);
+          if (targetReached(cardsByCode, totalCount)) break;
+          const autoGenerated = await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
+          if (!autoGenerated && !targetReached(cardsByCode, totalCount)) {
+            const hasNext = await goNextPage();
+            if (!hasNext) break;
+          }
+          if (processedCount(cardsByCode) <= beforeProcessed) noGrowthRounds += 1;
+          else noGrowthRounds = 0;
+          if (noGrowthRounds >= 2) break;
+          batch += 1;
         }
-        if (cardsByCode.size <= beforeSize) noGrowthRounds += 1;
-        else noGrowthRounds = 0;
-        if (noGrowthRounds >= 3) break;
-        batch += 1;
       }
 
       const cards = [...cardsByCode.values()];
-      latestRanked = rankCandidates(cards);
-      renderResults(cards.length);
+      const ranking = rankCandidates(cards);
+      latestRanked = ranking.ranked;
+      renderResults({
+        scannedCount: cards.length,
+        excludedCount: ranking.excludedCount,
+        excludedReasonCounts: ranking.excludedReasonCounts
+      });
     } catch (error) {
       console.error(error);
       setStatus(`失敗：${error.message}`);
+      setProgress(0, "失敗");
     } finally {
       isScanning = false;
       startButton.disabled = false;
