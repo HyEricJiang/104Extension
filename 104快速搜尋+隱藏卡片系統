@@ -1,11 +1,9 @@
 // ==UserScript==
 // @name         104 Resume Screening Standalone
 // @namespace    local.resume-screening-system
-// @version      1.4.0
+// @version      1.5.0
 // @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
 // @match        https://vip.104.com.tw/search/searchResult*
-// @match        https://vip.104.com.tw/search/*
-// @match        https://vip.104.com.tw/*
 // @grant        GM_setClipboard
 // @run-at       document-idle
 // ==/UserScript==
@@ -111,7 +109,7 @@
 
     panel.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
-        <strong>104 履歷掃描 v1.4</strong>
+        <strong>104 履歷掃描 v1.5</strong>
         <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="展開/收合">＋</button>
       </div>
       <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
@@ -205,8 +203,27 @@
     return [...historyItems].some((item) => {
       const text = item.textContent || "";
       const historyDate = parseHistoryDate(text);
-      return text.includes("發出") && historyDate && historyDate >= cutoffDate;
+      return /發出(?:邀約|面試邀約|職缺邀約|通知|訊息|信件)?/.test(text) && historyDate && historyDate >= cutoffDate;
     });
+  }
+
+  function isResumeCodeLookupMode() {
+    const url = new URL(location.href);
+    const kws = url.searchParams.get("kws") || "";
+    const codes = kws.match(/\b\d{10,}\b/g) || [];
+    return codes.length >= 1;
+  }
+
+  function shouldHideCardsOnThisPage() {
+    return location.pathname.startsWith("/search/searchResult") && !isResumeCodeLookupMode();
+  }
+
+  function restoreHiddenCards() {
+    document.querySelectorAll("[data-resume-screening-skipped]").forEach((card) => {
+      delete card.dataset.resumeScreeningSkipped;
+      card.style.removeProperty("display");
+    });
+    skippedCards = new Map();
   }
 
   function getSkipReason(card) {
@@ -235,6 +252,10 @@
   }
 
   function filterResumeCards() {
+    if (!shouldHideCardsOnThisPage()) {
+      restoreHiddenCards();
+      return;
+    }
     const cards = document.querySelectorAll(CARD_SELECTOR);
     for (const card of cards) {
       const reason = getSkipReason(card);
@@ -513,7 +534,9 @@
 
   function collectVisibleCards(cardsByCode) {
     filterResumeCards();
-    const pageCards = [...document.querySelectorAll(`${CARD_SELECTOR}:not([data-resume-screening-skipped])`)].map(extractCard);
+    const pageCards = [...document.querySelectorAll(CARD_SELECTOR)]
+      .filter((card) => !card.dataset.resumeScreeningSkipped && getComputedStyle(card).display !== "none")
+      .map(extractCard);
     for (const card of pageCards) {
       if (card.resumeCode) cardsByCode.set(card.resumeCode, card);
     }
