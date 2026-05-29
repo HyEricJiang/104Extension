@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Standalone
 // @namespace    local.resume-screening-system
-// @version      2.3.0
+// @version      2.4.0
 // @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -74,6 +74,7 @@
   const DATABASE_KEYWORDS = ["mssql", "ms sql", "sql server", "mysql", "oracle", "postgres", "資料庫", "db"];
   const ENGINEERING_PROCESS_KEYWORDS = ["git", "版控", "單元測試", "unit test", "ci/cd", "jira", "敏捷", "agile", "scrum"];
   const PROJECT_DEPTH_KEYWORDS = ["0到1", "架構", "導入", "重構", "效能", "api", "後端", "前端", "平台", "系統"];
+  const NON_WEB_DESIRED_TITLE_PATTERN = /資料科學|data\s*scientist|data\s*science|區塊鏈|blockchain|ai\s*工程師|人工智慧|machine\s*learning|機器學習|深度學習|半導體|semiconductor|android|andriod|\bios\b|app\s*工程師|app工程師|mobile|行動/i;
 
   let isScanning = false;
   let panel;
@@ -116,7 +117,7 @@
 
     panel.innerHTML = `
       <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
-        <strong>104 履歷掃描 v2.3</strong>
+        <strong>104 履歷掃描 v2.4</strong>
         <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="展開/收合">＋</button>
       </div>
       <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
@@ -326,6 +327,13 @@
   }
 
   function getSkipReason(card) {
+    const role = ROLE_RULES[inferRoleId()] || {};
+    const cardMeta = extractCardMeta(card);
+    if (isAllEnglishName(cardMeta.candidateName)) return "姓名為全英文，略過外籍候選人";
+    const titleMismatchReason = nonWebDesiredTitleRejectReason(role, cardMeta);
+    if (titleMismatchReason) return titleMismatchReason;
+    const engineerMismatchReason = nonTargetEngineerRejectReason(role, cardMeta);
+    if (engineerMismatchReason) return engineerMismatchReason;
     if (card.querySelector(".resume-remark.mt-2")) return "已有備註";
     if (hasRecentActiveOutreach(card)) return `近 ${MONTHS_TO_HIDE} 個月已有發出紀錄`;
     return "";
@@ -472,19 +480,29 @@
     };
   }
 
+  function extractCardMeta(card) {
+    const jobLines = [...card.querySelectorAll(JOB_HISTORY_SELECTOR)].map((item) => normalizeText(item.textContent));
+    return {
+      candidateName: normalizeText(card.querySelector(NAME_SELECTOR)?.textContent),
+      currentTitle: normalizeText(card.querySelector(PREFER_TITLE_SELECTOR)?.textContent).replace(/^希望職稱\s*[：:]?\s*/, ""),
+      experienceText: jobLines.join(" | ")
+    };
+  }
+
   function extractCard(card) {
     const codeText = normalizeText(card.querySelector(CODE_SELECTOR)?.textContent);
     const jobLines = [...card.querySelectorAll(JOB_HISTORY_SELECTOR)].map((item) => normalizeText(item.textContent));
     const allText = normalizeText(card.textContent);
     const href = card.querySelector(PROFILE_LINK_SELECTOR)?.getAttribute("href") || "";
+    const cardMeta = extractCardMeta(card);
 
     return {
       resumeCode: extractResumeCode(codeText || card.id),
       profileUrl: new URL(href, location.origin).toString(),
-      candidateName: normalizeText(card.querySelector(NAME_SELECTOR)?.textContent),
-      currentTitle: normalizeText(card.querySelector(PREFER_TITLE_SELECTOR)?.textContent).replace(/^希望職稱\s*[：:]?\s*/, ""),
+      candidateName: cardMeta.candidateName,
+      currentTitle: cardMeta.currentTitle,
       summary: allText,
-      experienceText: jobLines.join(" | "),
+      experienceText: cardMeta.experienceText,
       education: normalizeText(card.querySelector(EDUCATION_SELECTOR)?.textContent),
       workExperience: normalizeText(card.querySelector(WORK_EXPERIENCE_SELECTOR)?.textContent),
       hasProjectAchievement: /專案|系統|平台|開發|導入|架構|後端|前端|api|db|database|spring|\.net|mssql|mysql|oracle|銀行|電信/i.test(allText),
@@ -532,6 +550,8 @@
     const reasons = [];
     if (isAllEnglishName(card.candidateName)) reasons.push("姓名為全英文，略過外籍候選人");
     if (includesAny(text, GAMBLING_KEYWORDS)) reasons.push("博弈/博彩/娛樂城相關公司，直接排除");
+    const titleMismatchReason = nonWebDesiredTitleRejectReason(role, card);
+    if (titleMismatchReason) reasons.push(titleMismatchReason);
     const mismatchReason = nonTargetEngineerRejectReason(role, card);
     if (mismatchReason) reasons.push(mismatchReason);
     if (card.lastThreeJobsAllUnderOneYear) reasons.push("近三份工作皆一年或不滿一年，直接排除");
@@ -550,6 +570,12 @@
 
   function hasBackendOrGeneralSoftwareSignal(text) {
     return /後端|backend|back-end|全端|full\s*stack|full-stack|軟體工程師|software engineer|程式設計工程師|程式設計師|系統工程師/i.test(text);
+  }
+
+  function nonWebDesiredTitleRejectReason(role, card) {
+    const title = normalizeText(card.currentTitle);
+    if (!title || !NON_WEB_DESIRED_TITLE_PATTERN.test(title)) return "";
+    return "期待職稱明顯非網頁/後端/全端/軟體工程師需求";
   }
 
   function nonTargetEngineerRejectReason(role, card) {
