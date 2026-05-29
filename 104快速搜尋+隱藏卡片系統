@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Standalone
 // @namespace    local.resume-screening-system
-// @version      2.2.0
+// @version      2.3.0
 // @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -15,6 +15,7 @@
   const CARD_SELECTOR = '[data-qa-id="resumeCard"].vip-resume-card, [data-qa-id="resumeCard"].resume-card';
   const CODE_SELECTOR = ".resume-card__center .supportInfo-wrap .code, .supportInfo-wrap .code";
   const PROFILE_LINK_SELECTOR = 'a.name[href], .user-photo a[href]';
+  const NAME_SELECTOR = ".userInfo-wrap a.name, a.name.word-break-all";
   const EDUCATION_SELECTOR = '[data-qa-id="cardEducation"]';
   const PREFER_TITLE_SELECTOR = '[data-qa-id="cardPreferJobTitle"]';
   const WORK_EXPERIENCE_SELECTOR = '[data-qa-id="cardWorkExperience"]';
@@ -30,14 +31,14 @@
       name: "Java Software Programmer",
       hardRequiredAny: ["java"],
       hardRequiredPreferred: ["spring", "spring boot"],
-      positiveKeywords: ["spring", "spring boot", "java", "vue", "react", "angular", "javascript", "html", "css", "oracle", "mysql", "mssql", "git", "uml", "ooad", "銀行", "電信", "si", "系統整合", "code review", "mentor", "0到1", "專案開發"],
+      positiveKeywords: ["spring", "spring boot", "java", "vue", "react", "angular", "javascript", "html", "css", "oracle", "mysql", "mssql", "git", "uml", "ooad", "銀行", "電信", "si", "系統整合", "0到1", "專案開發"],
       negativeIfCurrentMissingAny: ["java", "spring"]
     },
     "csharp-dotnet-programmer": {
       name: "C#.Net Software Programmer",
       hardRequiredAny: ["c#", ".net", "asp.net"],
       hardRequiredPreferred: [".net core", ".net 6", "mvc"],
-      positiveKeywords: ["c#", "asp.net", ".net core", ".net 6", "mvc", "mssql", "ms sql", "mysql", "oracle", "vue", "react", "angular", "javascript", "html", "css", "git", "uml", "ooad", "銀行", "電信", "si", "系統整合", "code review", "mentor", "0到1", "專案開發"],
+      positiveKeywords: ["c#", "asp.net", ".net core", ".net 6", "mvc", "mssql", "ms sql", "mysql", "oracle", "vue", "react", "angular", "javascript", "html", "css", "git", "uml", "ooad", "銀行", "電信", "si", "系統整合", "0到1", "專案開發"],
       negativeIfCurrentMissingAny: ["c#", ".net", "asp.net"]
     },
     "system-analyst": {
@@ -71,8 +72,7 @@
   const ASSISTANT_STAGNATION_KEYWORDS = ["助理", "副理", "副工程師", "assistant"];
   const FRONTEND_KEYWORDS = ["vue", "react", "angular", "javascript", "typescript", "html", "css", "jquery"];
   const DATABASE_KEYWORDS = ["mssql", "ms sql", "sql server", "mysql", "oracle", "postgres", "資料庫", "db"];
-  const ENGINEERING_PROCESS_KEYWORDS = ["git", "版控", "code review", "單元測試", "unit test", "ci/cd", "jira", "敏捷", "agile", "scrum"];
-  const LEADERSHIP_KEYWORDS = ["mentor", "帶新人", "code review", "技術分享", "資深", "senior"];
+  const ENGINEERING_PROCESS_KEYWORDS = ["git", "版控", "單元測試", "unit test", "ci/cd", "jira", "敏捷", "agile", "scrum"];
   const PROJECT_DEPTH_KEYWORDS = ["0到1", "架構", "導入", "重構", "效能", "api", "後端", "前端", "平台", "系統"];
 
   let isScanning = false;
@@ -116,7 +116,7 @@
 
     panel.innerHTML = `
       <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
-        <strong>104 履歷掃描 v2.2</strong>
+        <strong>104 履歷掃描 v2.3</strong>
         <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="展開/收合">＋</button>
       </div>
       <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
@@ -481,6 +481,7 @@
     return {
       resumeCode: extractResumeCode(codeText || card.id),
       profileUrl: new URL(href, location.origin).toString(),
+      candidateName: normalizeText(card.querySelector(NAME_SELECTOR)?.textContent),
       currentTitle: normalizeText(card.querySelector(PREFER_TITLE_SELECTOR)?.textContent).replace(/^希望職稱\s*[：:]?\s*/, ""),
       summary: allText,
       experienceText: jobLines.join(" | "),
@@ -495,16 +496,21 @@
   }
 
   function buildText(card) {
-    return [card.resumeCode, card.currentTitle, card.summary, card.experienceText, card.education].join(" ");
+    return [card.resumeCode, card.candidateName, card.currentTitle, card.summary, card.experienceText, card.education].join(" ");
+  }
+
+  function splitExperienceLines(card) {
+    const lines = String(card.experienceText || "").split("|").map((line) => line.trim()).filter(Boolean);
+    return lines;
   }
 
   function recentExperienceText(card, take = 3) {
-    const lines = String(card.experienceText || "").split("|").map((line) => line.trim()).filter(Boolean);
+    const lines = splitExperienceLines(card);
     return [card.currentTitle, ...lines.slice(0, take), card.summary].join(" ");
   }
 
   function roleFocusedText(card, take = 4) {
-    const lines = String(card.experienceText || "").split("|").map((line) => line.trim()).filter(Boolean);
+    const lines = splitExperienceLines(card);
     return [card.currentTitle, ...lines.slice(0, take), card.education].join(" ");
   }
 
@@ -524,10 +530,38 @@
 
   function hardRejectReasons(role, card, text) {
     const reasons = [];
+    if (isAllEnglishName(card.candidateName)) reasons.push("姓名為全英文，略過外籍候選人");
     if (includesAny(text, GAMBLING_KEYWORDS)) reasons.push("博弈/博彩/娛樂城相關公司，直接排除");
+    const mismatchReason = nonTargetEngineerRejectReason(role, card);
+    if (mismatchReason) reasons.push(mismatchReason);
     if (card.lastThreeJobsAllUnderOneYear) reasons.push("近三份工作皆一年或不滿一年，直接排除");
     if (card.lastTwoJobsBothUnderThreeMonths) reasons.push("近兩份工作皆不滿三個月，直接排除");
     return reasons;
+  }
+
+  function isAllEnglishName(name) {
+    const compact = normalizeText(name);
+    return /[a-z]/i.test(compact) && /^[a-z\s.'-]+$/i.test(compact);
+  }
+
+  function isProgrammerRole(role) {
+    return /Java Software Programmer|C#\.Net Software Programmer/i.test(role.name || "");
+  }
+
+  function hasBackendOrGeneralSoftwareSignal(text) {
+    return /後端|backend|back-end|全端|full\s*stack|full-stack|軟體工程師|software engineer|程式設計工程師|程式設計師|系統工程師/i.test(text);
+  }
+
+  function nonTargetEngineerRejectReason(role, card) {
+    if (!isProgrammerRole(role)) return "";
+    const title = normalizeText(card.currentTitle);
+    const recentLines = splitExperienceLines(card).slice(0, 2).join(" ");
+    const focusedText = `${title} ${recentLines}`;
+    const frontendOnly = /前端|frontend|front-end/i.test(title) && !hasBackendOrGeneralSoftwareSignal(title);
+    const nonTargetRecent = /\bgo\b|golang|php|前端|frontend|front-end/i.test(focusedText) && !hasBackendOrGeneralSoftwareSignal(focusedText);
+    if (frontendOnly) return "希望職稱為純前端工程師，與後端/全端工程師需求不符";
+    if (nonTargetRecent) return "近期工作明顯偏前端/Go/PHP，且未顯示後端/全端/軟體工程師訊號";
+    return "";
   }
 
   function coreMismatchPenalty(role, card) {
@@ -577,13 +611,16 @@
     score += addFactor(factors, "資料庫經驗", Math.min(8, countMatches(text, DATABASE_KEYWORDS).length * 3), countMatches(text, DATABASE_KEYWORDS).join("、"));
     score += addFactor(factors, "前端/全端廣度", Math.min(6, countMatches(text, FRONTEND_KEYWORDS).length * 1.5), countMatches(text, FRONTEND_KEYWORDS).slice(0, 6).join("、"));
     score += addFactor(factors, "工程流程成熟度", Math.min(6, countMatches(text, ENGINEERING_PROCESS_KEYWORDS).length * 2), countMatches(text, ENGINEERING_PROCESS_KEYWORDS).join("、"));
-    score += addFactor(factors, "資深/帶人訊號", Math.min(5, countMatches(text, LEADERSHIP_KEYWORDS).length * 2), countMatches(text, LEADERSHIP_KEYWORDS).join("、"));
     score += addFactor(factors, "專案深度", Math.min(7, countMatches(text, PROJECT_DEPTH_KEYWORDS).length * 1.5), countMatches(text, PROJECT_DEPTH_KEYWORDS).slice(0, 6).join("、"));
     score += addFactor(factors, "產業/專案背景", Math.min(7, countMatches(text, SOFTWARE_PROJECT_KEYWORDS).length * 2.5), countMatches(text, SOFTWARE_PROJECT_KEYWORDS).join("、"));
 
-    if (workYears >= 3 && workYears <= 8) score += addFactor(factors, "年資區間", 5, `${workYears} 年，落在理想區間`);
-    else if (workYears > 8 && workYears <= 13) score += addFactor(factors, "年資區間", 3, `${workYears} 年，資深但仍可評估`);
-    else if (workYears > 0) score += addFactor(factors, "年資區間", 1, `${workYears} 年`);
+    if (workYears >= 10) {
+      const penalty = Math.max(1, Math.floor(workYears - 9));
+      score -= penalty;
+      addFactor(factors, "年資過高", -penalty, `${workYears} 年，10 年以上每多 1 年扣 1 分`);
+    } else if (workYears >= 5) score += addFactor(factors, "年資區間", 2, `${workYears} 年，5~10 年`);
+    else if (workYears >= 3) score += addFactor(factors, "年資區間", 5, `${workYears} 年，3~5 年`);
+    else if (workYears >= 1) score += addFactor(factors, "年資區間", 3, `${workYears} 年，1~3 年`);
 
     if (card.recentGapMonths >= 3 && !card.gapReason) {
       const penalty = card.recentGapMonths >= 18
