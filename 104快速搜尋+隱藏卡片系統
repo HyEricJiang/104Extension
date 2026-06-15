@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Standalone
 // @namespace    local.resume-screening-system
-// @version      2.4.0
+// @version      2.4.1
 // @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -81,6 +81,7 @@
   let statusNode;
   let startButton;
   let copyButton;
+  let launcherButton;
   let toggleButton;
   let resultNode;
   let summaryNode;
@@ -88,12 +89,15 @@
   let progressLabelNode;
   let bodyNode;
   let headerNode;
+  let shellNode;
   let skippedCards = new Map();
   let latestRanked = [];
   let isCollapsed = true;
+  let isPrintHidden = false;
 
   function mountPanel() {
     if (panel || !document.body) return;
+    injectPrintStyle();
     panel = document.createElement("div");
     panel.id = "resume-screening-104-panel";
     panel.style.cssText = [
@@ -103,44 +107,53 @@
       "right:18px",
       "bottom:18px",
       "z-index:2147483647",
-      "width:360px",
-      "max-height:76vh",
-      "padding:12px",
+      "width:64px",
+      "height:64px",
+      "padding:0",
       "border:1px solid #e7e0ef",
-      "border-radius:8px",
+      "border-radius:999px",
       "box-shadow:0 14px 36px rgba(37,48,68,.18)",
       "background:#fffafc",
       "color:#273044",
       "font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif",
-      "overflow:auto"
+      "overflow:visible",
+      "box-sizing:border-box"
     ].join(";");
 
     panel.innerHTML = `
-      <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
-        <strong>104 履歷掃描 v2.4</strong>
-        <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="展開/收合">＋</button>
-      </div>
-      <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
-      <div style="margin-bottom:8px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;color:#6b7280;font-size:11px;">
-          <span>掃描進度</span>
-          <span data-screening-progress-label>0%</span>
+      <button data-screening-launch style="width:64px;height:64px;border:0;border-radius:999px;background:linear-gradient(135deg,#b8eadc,#d9cff8,#ffd7c2);color:#273044;font-weight:900;cursor:pointer;box-shadow:0 12px 30px rgba(37,48,68,.18);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1px;line-height:1.05;" title="開啟 104 履歷掃描">
+        <span style="font-size:18px;">104</span>
+        <span style="font-size:11px;">掃描</span>
+      </button>
+      <div data-screening-shell style="display:none;">
+        <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
+          <strong>104 履歷掃描 v2.4.1</strong>
+          <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
-        <div style="height:8px;border-radius:999px;background:#f0edf7;overflow:hidden;border:1px solid #e7e0ef;">
-          <div data-screening-progress-fill style="width:0%;height:100%;border-radius:999px;background:linear-gradient(90deg,#b8eadc,#d9cff8,#ffd7c2);transition:width .22s ease;"></div>
+        <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
+        <div style="margin-bottom:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;color:#6b7280;font-size:11px;">
+            <span>掃描進度</span>
+            <span data-screening-progress-label>0%</span>
+          </div>
+          <div style="height:8px;border-radius:999px;background:#f0edf7;overflow:hidden;border:1px solid #e7e0ef;">
+            <div data-screening-progress-fill style="width:0%;height:100%;border-radius:999px;background:linear-gradient(90deg,#b8eadc,#d9cff8,#ffd7c2);transition:width .22s ease;"></div>
+          </div>
         </div>
-      </div>
-      <div data-screening-status style="margin-bottom:10px;color:#6b7280;font-size:12px;">會跳過有備註或 3 個月內已發出的人選</div>
-      <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <button data-screening-start style="flex:1;height:34px;border:1px solid #d9cff8;border-radius:8px;background:#d9cff8;color:#273044;font-weight:700;cursor:pointer;">掃描並顯示前 20 名</button>
-        <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">開啟履歷</button>
-      </div>
-      <div data-screening-body style="display:none;">
-        <div data-screening-results style="display:grid;gap:8px;"></div>
+        <div data-screening-status style="margin-bottom:10px;color:#6b7280;font-size:12px;">會跳過有備註或 3 個月內已發出的人選</div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <button data-screening-start style="flex:1;height:34px;border:1px solid #d9cff8;border-radius:8px;background:#d9cff8;color:#273044;font-weight:700;cursor:pointer;">掃描並顯示前 20 名</button>
+          <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">開啟履歷</button>
+        </div>
+        <div data-screening-body style="display:none;">
+          <div data-screening-results style="display:grid;gap:8px;"></div>
+        </div>
       </div>
     `;
     document.body.append(panel);
 
+    launcherButton = panel.querySelector("[data-screening-launch]");
+    shellNode = panel.querySelector("[data-screening-shell]");
     statusNode = panel.querySelector("[data-screening-status]");
     summaryNode = panel.querySelector("[data-screening-summary]");
     progressFillNode = panel.querySelector("[data-screening-progress-fill]");
@@ -151,12 +164,13 @@
     bodyNode = panel.querySelector("[data-screening-body]");
     resultNode = panel.querySelector("[data-screening-results]");
     headerNode = panel.querySelector("[data-screening-header]");
+    launcherButton.addEventListener("click", () => setCollapsed(false));
     startButton.addEventListener("click", scan);
     copyButton.addEventListener("click", openRankedProfiles);
-    toggleButton.addEventListener("click", () => setCollapsed(!isCollapsed));
+    toggleButton.addEventListener("click", () => setCollapsed(true));
+    setupPrintAutoHide();
     enablePanelDrag();
     setCollapsed(true);
-    applySavedPanelPosition();
   }
 
   function ensurePanel() {
@@ -183,11 +197,67 @@
 
   function setCollapsed(nextCollapsed) {
     isCollapsed = nextCollapsed;
-    if (!bodyNode || !toggleButton || !panel) return;
+    if (!bodyNode || !launcherButton || !shellNode || !toggleButton || !panel) return;
+    launcherButton.style.display = isCollapsed ? "flex" : "none";
+    shellNode.style.display = isCollapsed ? "none" : "block";
     bodyNode.style.display = isCollapsed ? "none" : "block";
-    toggleButton.textContent = isCollapsed ? "＋" : "－";
-    panel.style.width = isCollapsed ? "320px" : "420px";
+    toggleButton.textContent = "－";
+    panel.style.width = isCollapsed ? "64px" : "420px";
+    panel.style.height = isCollapsed ? "64px" : "auto";
+    panel.style.maxHeight = isCollapsed ? "64px" : "76vh";
+    panel.style.padding = isCollapsed ? "0" : "12px";
+    panel.style.borderRadius = isCollapsed ? "999px" : "8px";
+    panel.style.overflow = isCollapsed ? "visible" : "auto";
+    if (isCollapsed) {
+      panel.style.left = "auto";
+      panel.style.top = "auto";
+      panel.style.right = "18px";
+      panel.style.bottom = "18px";
+      return;
+    }
+    applySavedPanelPosition();
     keepPanelInViewport();
+  }
+
+  function setupPrintAutoHide() {
+    if (setupPrintAutoHide.done) return;
+    setupPrintAutoHide.done = true;
+    window.addEventListener("beforeprint", hidePanelForPrint);
+    window.addEventListener("afterprint", showPanelAfterPrint);
+    if (typeof window.matchMedia !== "function") return;
+    const printQuery = window.matchMedia("print");
+    const handlePrintChange = (event) => {
+      if (event.matches) hidePanelForPrint();
+      else showPanelAfterPrint();
+    };
+    if (typeof printQuery.addEventListener === "function") {
+      printQuery.addEventListener("change", handlePrintChange);
+    } else if (typeof printQuery.addListener === "function") {
+      printQuery.addListener(handlePrintChange);
+    }
+  }
+
+  function injectPrintStyle() {
+    if (document.getElementById("resume-screening-104-print-style")) return;
+    const style = document.createElement("style");
+    style.id = "resume-screening-104-print-style";
+    style.textContent = "@media print { #resume-screening-104-panel { display: none !important; } }";
+    (document.head || document.documentElement).append(style);
+  }
+
+  function hidePanelForPrint() {
+    mountPanel();
+    if (!panel) return;
+    setCollapsed(true);
+    panel.style.display = "none";
+    isPrintHidden = true;
+  }
+
+  function showPanelAfterPrint() {
+    if (!panel || !isPrintHidden) return;
+    panel.style.display = "block";
+    setCollapsed(true);
+    isPrintHidden = false;
   }
 
   function clamp(value, min, max) {
@@ -864,7 +934,7 @@
     setProgress(100, "完成");
     const shortageNote = latestRanked.length < 20
       ? `本次少於 20 筆，多半是可分析卡片不足或 ${excludedCount} 筆被硬性排除。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
-      : "按「＋」展開查看原因；按「開啟履歷」批次開啟前 20 名";
+      : "點右下角「104 掃描」查看原因；按「開啟履歷」批次開啟前 20 名";
     setStatus(shortageNote);
     setCollapsed(true);
   }
@@ -903,7 +973,7 @@
     skippedCards = new Map();
     latestRanked = [];
     resultNode.innerHTML = "";
-    setCollapsed(true);
+    setCollapsed(false);
     setProgress(0);
 
     const cardsByCode = new Map();
