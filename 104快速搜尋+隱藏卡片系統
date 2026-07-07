@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.resume-screening-system
-// @version      3.0.0
+// @version      3.0.1
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -36,6 +36,8 @@
   const DEFAULT_OPEN_LIMIT = 0;
   const RANKED_LIST_PAGE_SIZE = 50;
   const BADGE_LIMIT = 4;
+  const FILTER_DEBOUNCE_MS = 450;
+  const FILTER_MAX_CARDS_PER_PASS = 40;
 
   const ROLE_RULES = {
     "java-programmer": {
@@ -111,8 +113,11 @@
   let currentResultPage = 1;
   let latestCardsByCode = new Map();
   let latestScoreByCode = new Map();
+  let filterTimer = 0;
   let isCollapsed = true;
   let isPrintHidden = false;
+  const cardTextCache = new WeakMap();
+  const cardRuleMatchCache = new WeakMap();
   const sharedRuleState = {
     payload: null,
     fetchedAt: 0,
@@ -152,7 +157,7 @@
       </button>
       <div data-screening-shell style="display:none;">
         <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
-          <strong>104 履歷掃描 v3.0.0</strong>
+          <strong>104 履歷掃描 v3.0.1</strong>
           <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
@@ -756,10 +761,93 @@
     if (code) skippedCards.set(code, reason);
   }
 
+  function isScreeningOwnedElement(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+    return Boolean(
+      element.closest("#resume-screening-104-panel")
+      || element.closest("[data-resume-shared-rules-badges]")
+      || element.matches(".resume-screening-score-badge")
+    );
+  }
+
+  function cardTextSignature(card) {
+    const ownedTextLength = [...card.querySelectorAll("[data-resume-shared-rules-badges]")]
+      .reduce((sum, node) => sum + normalizeText(node.textContent).length, 0);
+    return [
+      extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id),
+      Math.max(0, normalizeText(card.textContent).length - ownedTextLength),
+      card.querySelectorAll(JOB_HISTORY_SELECTOR).length,
+      normalizeText(card.querySelector(NAME_SELECTOR)?.textContent),
+      normalizeText(card.querySelector(PREFER_TITLE_SELECTOR)?.textContent)
+    ].join("|");
+  }
+
+  function readNativeCardText(card) {
+    const pieces = [];
+    const walker = document.createTreeWalker(
+      card,
+      NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          const parent = node.parentElement;
+          if (!parent || isScreeningOwnedElement(parent)) return NodeFilter.FILTER_REJECT;
+          return normalizeText(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      }
+    );
+
+    while (walker.nextNode()) {
+      pieces.push(walker.currentNode.nodeValue);
+    }
+
+    return normalizeText(pieces.join(" "));
+  }
+
   function getCardReadableText(card) {
-    const clone = card.cloneNode(true);
-    clone.querySelectorAll("[data-resume-shared-rules-badges]").forEach((node) => node.remove());
-    return normalizeText(clone.textContent || "");
+    const signature = cardTextSignature(card);
+    const cached = cardTextCache.get(card);
+    if (cached && cached.signature === signature) return cached.text;
+
+    const text = readNativeCardText(card);
+    cardTextCache.set(card, { signature, text });
+    return text;
+  }
+
+  function sharedRulesVersion() {
+    const payload = sharedRuleState.payload;
+    if (!payload) return "no-rules";
+    return payload.version || payload.generatedAt || [
+      payload.schemaVersion || "",
+      payload.companyRules?.length || 0,
+      payload.keywordRules?.length || 0,
+      sharedRuleState.fetchedAt || 0
+    ].join(":");
+  }
+
+  function getRuleMatchesForCard(card) {
+    const signature = cardTextSignature(card);
+    const version = sharedRulesVersion();
+    const cached = cardRuleMatchCache.get(card);
+    if (cached && cached.signature === signature && cached.version === version) return cached.matches;
+
+    const matches = matchRulesAgainstText(getCardReadableText(card));
+    cardRuleMatchCache.set(card, { signature, version, matches });
+    return matches;
+  }
+
+  function cardScoreSignature(code) {
+    const item = latestScoreByCode.get(code);
+    return item ? `${item.score}:${item.status}:${item.reasons.slice(0, 2).join("/")}` : "no-score";
+  }
+
+  function cardFilterKey(card) {
+    const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
+    return [
+      cardTextSignature(card),
+      sharedRulesVersion(),
+      cardScoreSignature(code),
+      card.dataset.resumeScreeningSkipped || ""
+    ].join("||");
   }
 
   function ensureBadgeContainer(card) {
@@ -828,23 +916,72 @@
     return riskMatch ? `命中博弈風險規則：${riskMatch.matchedTerm}` : "";
   }
 
-  function filterResumeCards() {
+  function filterResumeCards(options = {}) {
     if (!shouldHideCardsOnThisPage()) {
       restoreHiddenCards();
       return;
     }
-    const cards = document.querySelectorAll(CARD_SELECTOR);
+    const maxCards = options.force || isScanning ? Infinity : FILTER_MAX_CARDS_PER_PASS;
+    const cards = [...document.querySelectorAll(CARD_SELECTOR)];
+    let processed = 0;
+    let hasMorePendingCards = false;
+
     for (const card of cards) {
-      const ruleMatches = matchRulesAgainstText(getCardReadableText(card));
+      const filterKey = cardFilterKey(card);
+      if (!options.force && card.dataset.resumeScreeningFilterKey === filterKey) continue;
+
+      const ruleMatches = getRuleMatchesForCard(card);
       renderRuleBadges(card, ruleMatches);
       const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
       const scoredItem = latestScoreByCode.get(code);
       if (scoredItem) renderScoreBadge(card, scoredItem);
       const reason = card.dataset.resumeScreeningSkipped || getSkipReason(card) || getRuleHideReason(ruleMatches);
-      if (!reason) continue;
-      rememberSkippedCard(card, reason);
-      hideSkippedCard(card, reason);
+      if (reason) {
+        rememberSkippedCard(card, reason);
+        hideSkippedCard(card, reason);
+      }
+      card.dataset.resumeScreeningFilterKey = cardFilterKey(card);
+      processed += 1;
+      if (processed >= maxCards) {
+        hasMorePendingCards = true;
+        break;
+      }
     }
+
+    if (hasMorePendingCards && !isScanning) scheduleFilterResumeCards(FILTER_DEBOUNCE_MS);
+  }
+
+  function scheduleFilterResumeCards(delay = FILTER_DEBOUNCE_MS) {
+    if (filterTimer) window.clearTimeout(filterTimer);
+    filterTimer = window.setTimeout(() => {
+      filterTimer = 0;
+      filterResumeCards();
+    }, delay);
+  }
+
+  function elementFromMutationNode(node) {
+    if (!node) return null;
+    if (node.nodeType === Node.ELEMENT_NODE) return node;
+    return node.parentElement || null;
+  }
+
+  function isScreeningOwnedNode(node) {
+    return isScreeningOwnedElement(elementFromMutationNode(node));
+  }
+
+  function mutationOnlyTouchesScreeningUi(mutation) {
+    const targetIsOwned = isScreeningOwnedNode(mutation.target);
+    const addedNodes = [...mutation.addedNodes];
+    const removedNodes = [...mutation.removedNodes];
+    const addedAreOwned = !addedNodes.length || addedNodes.every(isScreeningOwnedNode);
+    const removedAreOwned = !removedNodes.length || removedNodes.every(isScreeningOwnedNode);
+    return targetIsOwned || (addedAreOwned && removedAreOwned && (addedNodes.length || removedNodes.length));
+  }
+
+  function shouldScheduleFilterForMutations(mutations) {
+    if (isScanning) return false;
+    if (!mutations.length) return false;
+    return mutations.some((mutation) => !mutationOnlyTouchesScreeningUi(mutation));
   }
 
   function getTotalCount() {
@@ -1674,11 +1811,13 @@
   }
 
   ensurePanel();
-  loadSharedRules().then(() => filterResumeCards()).catch((error) => {
+  loadSharedRules().then(() => scheduleFilterResumeCards(0)).catch((error) => {
     console.warn("shared rules load failed", error);
   });
 
-  const observer = new MutationObserver(() => filterResumeCards());
+  const observer = new MutationObserver((mutations) => {
+    if (shouldScheduleFilterForMutations(mutations)) scheduleFilterResumeCards();
+  });
   if (document.body) {
     observer.observe(document.body, { childList: true, subtree: true });
   }
