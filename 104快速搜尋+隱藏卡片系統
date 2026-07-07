@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.resume-screening-system
-// @version      3.0.2
+// @version      3.0.3
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -40,6 +40,23 @@
   const FILTER_MAX_CARDS_PER_PASS = 40;
   const SCAN_STALL_TIMEOUT_MS = 10000;
   const PAGE_CHANGE_TIMEOUT_MS = 10000;
+  const UI = Object.freeze({
+    navy: "#0f2742",
+    navyHover: "#183b61",
+    navySoft: "#eaf0f7",
+    ink: "#172033",
+    muted: "#657386",
+    border: "#d8e0ea",
+    borderStrong: "#b9c6d5",
+    surface: "#ffffff",
+    page: "#f6f8fb",
+    success: "#0f6b4f",
+    successBg: "#e8f5f0",
+    warning: "#96530f",
+    warningBg: "#fff4e5",
+    danger: "#9f2f18",
+    dangerBg: "#fff1ed"
+  });
 
   const ROLE_RULES = {
     "java-programmer": {
@@ -142,40 +159,40 @@
       "width:64px",
       "height:64px",
       "padding:0",
-      "border:1px solid #e7e0ef",
+      `border:1px solid ${UI.border}`,
       "border-radius:999px",
-      "box-shadow:0 14px 36px rgba(37,48,68,.18)",
-      "background:#fffafc",
-      "color:#273044",
+      "box-shadow:0 18px 42px rgba(15,39,66,.20)",
+      `background:${UI.surface}`,
+      `color:${UI.ink}`,
       "font:14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif",
       "overflow:visible",
       "box-sizing:border-box"
     ].join(";");
 
     panel.innerHTML = `
-      <button data-screening-launch style="width:64px;height:64px;border:0;border-radius:999px;background:linear-gradient(135deg,#b8eadc,#d9cff8,#ffd7c2);color:#273044;font-weight:900;cursor:pointer;box-shadow:0 12px 30px rgba(37,48,68,.18);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1px;line-height:1.05;" title="開啟 104 履歷掃描">
+      <button data-screening-launch style="width:64px;height:64px;border:0;border-radius:999px;background:${UI.navy};color:#fff;font-weight:900;cursor:pointer;box-shadow:0 14px 32px rgba(15,39,66,.28);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1px;line-height:1.05;" title="開啟 104 履歷掃描">
         <span style="font-size:18px;">104</span>
         <span style="font-size:11px;">掃描</span>
       </button>
       <div data-screening-shell style="display:none;">
-        <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
-          <strong>104 履歷掃描 v3.0.2</strong>
-          <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
+        <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};cursor:move;user-select:none;">
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v3.0.3</strong>
+          <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
-        <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
+        <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
         <div style="margin-bottom:8px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;color:#6b7280;font-size:11px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;color:${UI.muted};font-size:11px;">
             <span>掃描進度</span>
             <span data-screening-progress-label>0%</span>
           </div>
-          <div style="height:8px;border-radius:999px;background:#f0edf7;overflow:hidden;border:1px solid #e7e0ef;">
-            <div data-screening-progress-fill style="width:0%;height:100%;border-radius:999px;background:linear-gradient(90deg,#b8eadc,#d9cff8,#ffd7c2);transition:width .22s ease;"></div>
+          <div style="height:8px;border-radius:999px;background:${UI.navySoft};overflow:hidden;border:1px solid ${UI.border};">
+            <div data-screening-progress-fill style="width:0%;height:100%;border-radius:999px;background:${UI.navy};transition:width .22s ease;"></div>
           </div>
         </div>
-        <div data-screening-status style="margin-bottom:10px;color:#6b7280;font-size:12px;">會跳過有備註或 3 個月內已發出的人選，並依分數排序</div>
+        <div data-screening-status style="margin-bottom:10px;color:${UI.muted};font-size:12px;">會跳過有備註或 3 個月內已發出的人選，並依分數排序</div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <button data-screening-start style="flex:1;height:34px;border:1px solid #d9cff8;border-radius:8px;background:#d9cff8;color:#273044;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
-          <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">開啟勾選</button>
+          <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
+          <button data-screening-copy style="height:36px;border:1px solid ${UI.borderStrong};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;">開啟勾選</button>
         </div>
         <div data-screening-body style="display:none;">
           <div data-screening-results style="display:grid;gap:8px;"></div>
@@ -289,23 +306,23 @@
         min-height: 22px;
         padding: 2px 8px;
         border-radius: 6px;
-        border: 1px solid #d9e2ec;
-        background: #f8fafc;
-        color: #334155;
+        border: 1px solid ${UI.border};
+        background: ${UI.surface};
+        color: ${UI.ink};
         font: 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
         white-space: normal;
         word-break: break-word;
         box-sizing: border-box;
       }
       .resume-shared-rule-badge--positive {
-        border-color: #8dd6b6;
-        background: #ebfff6;
-        color: #166546;
+        border-color: ${UI.borderStrong};
+        background: ${UI.navySoft};
+        color: ${UI.navy};
       }
       .resume-shared-rule-badge--risk {
-        border-color: #f5b5a8;
-        background: #fff2ee;
-        color: #9f2f18;
+        border-color: #d98b78;
+        background: ${UI.dangerBg};
+        color: ${UI.danger};
         font-weight: 700;
       }
       .resume-shared-rule-badge--low {
@@ -319,8 +336,8 @@
         min-height: 22px;
         padding: 2px 8px;
         border-radius: 6px;
-        background: #ffd7c2;
-        color: #273044;
+        background: ${UI.navy};
+        color: #fff;
         font: 700 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
       }
     `;
@@ -1747,11 +1764,11 @@
 
   function renderFilterButton(filter, count) {
     const active = currentResultFilter === filter;
-    return `<button data-result-filter="${filter}" style="height:28px;border:1px solid ${active ? "#b8eadc" : "#e7e0ef"};border-radius:8px;background:${active ? "#b8eadc" : "#fff"};color:#273044;font-weight:700;cursor:pointer;">${resultFilterLabel(filter)} ${count}</button>`;
+    return `<button data-result-filter="${filter}" style="height:30px;border:1px solid ${active ? UI.navy : UI.border};border-radius:8px;background:${active ? UI.navy : UI.surface};color:${active ? "#fff" : UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">${resultFilterLabel(filter)} ${count}</button>`;
   }
 
   function renderSelectionButton(action, label) {
-    return `<button data-select-action="${action}" style="height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:700;cursor:pointer;">${label}</button>`;
+    return `<button data-select-action="${action}" style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">${label}</button>`;
   }
 
   function renderResultItem(item, absoluteIndex) {
@@ -1759,22 +1776,23 @@
     const disabled = item.profileUrl ? "" : "disabled";
     const displayReasons = (item.displayReasons && item.displayReasons.length ? item.displayReasons : item.reasons || []).slice(0, 5);
     const statusLabel = item.status === "review_required" ? "人工覆核" : item.status === "excluded" ? "排除" : "推薦";
-    const statusColor = item.status === "review_required" ? "#fff2ee" : item.status === "excluded" ? "#f3f4f6" : "#ebfff6";
-    const statusBorder = item.status === "review_required" ? "#f5b5a8" : item.status === "excluded" ? "#d1d5db" : "#8dd6b6";
+    const statusColor = item.status === "review_required" ? UI.warningBg : item.status === "excluded" ? "#eef2f6" : UI.navySoft;
+    const statusBorder = item.status === "review_required" ? "#d7a45b" : item.status === "excluded" ? UI.border : UI.borderStrong;
+    const statusTextColor = item.status === "review_required" ? UI.warning : item.status === "excluded" ? UI.muted : UI.navy;
     const cardMark = item.cardElementAvailable ? "目前頁" : "跨頁/未載入";
     return `
-      <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:8px;cursor:${item.profileUrl ? "pointer" : "default"};" title="${item.profileUrl ? "點擊卡片可切換勾選" : ""}">
+      <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid ${UI.border};border-radius:8px;background:${UI.surface};padding:10px;cursor:${item.profileUrl ? "pointer" : "default"};box-shadow:0 1px 2px rgba(15,39,66,.04);" title="${item.profileUrl ? "點擊卡片可切換勾選" : ""}">
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;">
           <input type="checkbox" data-result-select="${escapeHtml(item.resumeCode)}" ${checked} ${disabled} title="勾選後可批次開啟">
           <div style="min-width:0;">
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-              <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer" style="font-weight:800;color:#5d4fb4;text-decoration:none;">${absoluteIndex}. ${escapeHtml(item.resumeCode)}</a>
-              <span style="border:1px solid ${statusBorder};border-radius:8px;background:${statusColor};padding:1px 6px;font-size:11px;font-weight:700;">${statusLabel}</span>
-              <span style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:1px 6px;font-size:11px;color:#6b7280;">${cardMark}</span>
+              <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer" style="font-weight:800;color:${UI.navy};text-decoration:none;">${absoluteIndex}. ${escapeHtml(item.resumeCode)}</a>
+              <span style="border:1px solid ${statusBorder};border-radius:8px;background:${statusColor};color:${statusTextColor};padding:1px 6px;font-size:11px;font-weight:700;">${statusLabel}</span>
+              <span style="border:1px solid ${UI.border};border-radius:8px;background:#fff;padding:1px 6px;font-size:11px;color:${UI.muted};">${cardMark}</span>
             </div>
-            <ul style="margin:6px 0 0;padding-left:18px;color:#6b7280;font-size:12px;">${displayReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+            <ul style="margin:6px 0 0;padding-left:18px;color:${UI.muted};font-size:12px;">${displayReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
           </div>
-          <strong style="background:#ffd7c2;border-radius:8px;padding:2px 8px;">${item.score}</strong>
+          <strong style="background:${UI.navy};color:#fff;border-radius:8px;padding:2px 8px;">${item.score}</strong>
         </div>
       </article>
     `;
@@ -1877,14 +1895,14 @@
         ${renderSelectionButton("select-page", "本頁全勾")}
         ${renderSelectionButton("clear-page", "本頁全不勾")}
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:#6b7280;font-size:12px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:${UI.muted};font-size:12px;">
         <span>${resultFilterLabel(currentResultFilter)}第 ${currentResultPage}/${totalPages} 頁，每頁 ${RANKED_LIST_PAGE_SIZE} 筆</span>
         <span data-selected-count>已勾選 ${selectedResumeCodes.size} 筆</span>
       </div>
-      ${visibleItems.length ? visibleItems.map((item, index) => renderResultItem(item, startIndex + index + 1)).join("") : `<div style="color:#6b7280;">沒有符合條件的候選人</div>`}
+      ${visibleItems.length ? visibleItems.map((item, index) => renderResultItem(item, startIndex + index + 1)).join("") : `<div style="color:${UI.muted};">沒有符合條件的候選人</div>`}
       <div style="display:flex;justify-content:space-between;gap:8px;margin-top:8px;">
-        <button data-result-page="${currentResultPage - 1}" ${currentResultPage <= 1 ? "disabled" : ""} style="height:30px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:700;cursor:pointer;">上一頁</button>
-        <button data-result-page="${currentResultPage + 1}" ${currentResultPage >= totalPages ? "disabled" : ""} style="height:30px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:700;cursor:pointer;">下一頁</button>
+        <button data-result-page="${currentResultPage - 1}" ${currentResultPage <= 1 ? "disabled" : ""} style="height:32px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">上一頁</button>
+        <button data-result-page="${currentResultPage + 1}" ${currentResultPage >= totalPages ? "disabled" : ""} style="height:32px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">下一頁</button>
       </div>
     `;
     attachResultEvents();
@@ -1895,7 +1913,6 @@
       ? `已依分數排序；可勾選後開啟履歷。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
       : `沒有推薦候選人。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`;
     setStatus(shortageNote);
-    setCollapsed(true);
   }
 
   function escapeHtml(value) {
