@@ -1,11 +1,14 @@
 // ==UserScript==
-// @name         104 Resume Screening Standalone
+// @name         104 Resume Screening Unified
 // @namespace    local.resume-screening-system
-// @version      2.4.1
-// @description  Scan 104 VIP resume cards, skip remarks/recent outreach, rank candidates, and show top 20 directly on the page.
+// @version      3.0.0
+// @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
 // @grant        GM_openInTab
+// @grant        GM_xmlhttpRequest
+// @connect      script.google.com
+// @connect      script.googleusercontent.com
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -25,6 +28,14 @@
   const BOTTOM_LOAD_WAIT_MS = 2300;
   const MONTHS_TO_HIDE = 3;
   const PANEL_POSITION_KEY = "resume-screening-104-panel-position";
+  const RULES_API_URL = "https://script.google.com/macros/s/AKfycbxcXDndkNeJAdfvUbk_C-AQjW7P5u7jPW7oTR_rV0IOb6Ddrp9ehg4QDbXC7Ajufh3h/exec";
+  const SHARED_RULES_CACHE_KEY = "104-hide-resume-cards.shared-rules-cache.v1";
+  const DEFAULT_TTL_SECONDS = 60;
+  const RISK_ACTION = "review";
+  const ENABLE_INLINE_REORDER = true;
+  const DEFAULT_OPEN_LIMIT = 0;
+  const RANKED_LIST_PAGE_SIZE = 50;
+  const BADGE_LIMIT = 4;
 
   const ROLE_RULES = {
     "java-programmer": {
@@ -92,8 +103,22 @@
   let shellNode;
   let skippedCards = new Map();
   let latestRanked = [];
+  let latestReviewRequired = [];
+  let latestExcluded = [];
+  let latestAllResults = [];
+  let selectedResumeCodes = new Set();
+  let currentResultFilter = "ranked";
+  let currentResultPage = 1;
+  let latestCardsByCode = new Map();
+  let latestScoreByCode = new Map();
   let isCollapsed = true;
   let isPrintHidden = false;
+  const sharedRuleState = {
+    payload: null,
+    fetchedAt: 0,
+    stale: false,
+    statusMessage: ""
+  };
 
   function mountPanel() {
     if (panel || !document.body) return;
@@ -127,7 +152,7 @@
       </button>
       <div data-screening-shell style="display:none;">
         <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
-          <strong>104 履歷掃描 v2.4.1</strong>
+          <strong>104 履歷掃描 v3.0.0</strong>
           <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
@@ -140,10 +165,10 @@
             <div data-screening-progress-fill style="width:0%;height:100%;border-radius:999px;background:linear-gradient(90deg,#b8eadc,#d9cff8,#ffd7c2);transition:width .22s ease;"></div>
           </div>
         </div>
-        <div data-screening-status style="margin-bottom:10px;color:#6b7280;font-size:12px;">會跳過有備註或 3 個月內已發出的人選</div>
+        <div data-screening-status style="margin-bottom:10px;color:#6b7280;font-size:12px;">會跳過有備註或 3 個月內已發出的人選，並依分數排序</div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <button data-screening-start style="flex:1;height:34px;border:1px solid #d9cff8;border-radius:8px;background:#d9cff8;color:#273044;font-weight:700;cursor:pointer;">掃描並顯示前 20 名</button>
-          <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">開啟履歷</button>
+          <button data-screening-start style="flex:1;height:34px;border:1px solid #d9cff8;border-radius:8px;background:#d9cff8;color:#273044;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
+          <button data-screening-copy style="height:34px;border:1px solid #b8eadc;border-radius:8px;background:#b8eadc;color:#273044;font-weight:700;cursor:pointer;">開啟勾選</button>
         </div>
         <div data-screening-body style="display:none;">
           <div data-screening-results style="display:grid;gap:8px;"></div>
@@ -241,7 +266,57 @@
     if (document.getElementById("resume-screening-104-print-style")) return;
     const style = document.createElement("style");
     style.id = "resume-screening-104-print-style";
-    style.textContent = "@media print { #resume-screening-104-panel { display: none !important; } }";
+    style.textContent = `
+      @media print { #resume-screening-104-panel { display: none !important; } }
+      [data-resume-shared-rules-badges] {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 6px 0 8px;
+        align-items: center;
+      }
+      .resume-shared-rule-badge {
+        display: inline-flex;
+        align-items: center;
+        max-width: 100%;
+        min-height: 22px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        border: 1px solid #d9e2ec;
+        background: #f8fafc;
+        color: #334155;
+        font: 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+        white-space: normal;
+        word-break: break-word;
+        box-sizing: border-box;
+      }
+      .resume-shared-rule-badge--positive {
+        border-color: #8dd6b6;
+        background: #ebfff6;
+        color: #166546;
+      }
+      .resume-shared-rule-badge--risk {
+        border-color: #f5b5a8;
+        background: #fff2ee;
+        color: #9f2f18;
+        font-weight: 700;
+      }
+      .resume-shared-rule-badge--low {
+        border-style: dashed;
+        opacity: .78;
+        font-weight: 500;
+      }
+      .resume-screening-score-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: #ffd7c2;
+        color: #273044;
+        font: 700 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+      }
+    `;
     (document.head || document.documentElement).append(style);
   }
 
@@ -348,6 +423,245 @@
     return keywords.filter((keyword) => normalized.includes(normalize(keyword)));
   }
 
+  function normalizeForMatch(value) {
+    return String(value || "")
+      .normalize("NFKC")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function isEnglishShortToken(term) {
+    return /^[a-z0-9+#.]{1,3}$/i.test(term);
+  }
+
+  function termMatches(text, term) {
+    const normalizedText = normalizeForMatch(text);
+    const normalizedTerm = normalizeForMatch(term);
+    if (!normalizedTerm) return false;
+
+    if (isEnglishShortToken(normalizedTerm)) {
+      const regex = new RegExp("(^|[^a-z0-9])" + escapeRegExp(normalizedTerm) + "([^a-z0-9]|$)", "i");
+      return regex.test(normalizedText);
+    }
+
+    return normalizedText.includes(normalizedTerm);
+  }
+
+  function uniqueTerms(terms) {
+    const seen = new Set();
+    return (terms || [])
+      .map(normalizeText)
+      .filter(Boolean)
+      .filter((term) => {
+        const key = normalizeForMatch(term);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }
+
+  function isLowConfidence(value) {
+    const normalized = normalizeText(value);
+    return normalized === "低" || normalized === "中低";
+  }
+
+  function matchCompanyRules(text, rules) {
+    return (rules || [])
+      .map((rule) => {
+        const terms = uniqueTerms([rule.canonicalName].concat(rule.aliases || []));
+        const matchedTerm = terms.find((term) => termMatches(text, term));
+        if (!matchedTerm) return null;
+
+        return {
+          kind: "company",
+          id: rule.id,
+          category: rule.category,
+          label: rule.label,
+          matchedTerm,
+          displayName: rule.canonicalName,
+          scoreDelta: Number(rule.scoreDelta || 0),
+          reviewRequired: Boolean(rule.reviewRequired),
+          confidence: rule.confidence || "",
+          lowConfidence: isLowConfidence(rule.confidence),
+          sourceUrl: rule.sourceUrl || "",
+          note: rule.note || ""
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function matchKeywordRules(text, rules) {
+    return (rules || [])
+      .map((rule) => {
+        const matchedTerm = uniqueTerms(rule.keywords || []).find((term) => termMatches(text, term));
+        if (!matchedTerm) return null;
+
+        return {
+          kind: "keyword",
+          id: rule.id,
+          category: rule.category,
+          label: rule.normalizedTag,
+          matchedTerm,
+          displayName: rule.normalizedTag,
+          scoreDelta: Number(rule.scoreDelta || 0),
+          reviewRequired: Boolean(rule.reviewRequired),
+          confidence: "",
+          lowConfidence: false,
+          sourceUrl: "",
+          note: rule.note || ""
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function matchRulesAgainstText(text, payload = sharedRuleState.payload) {
+    if (!payload) return [];
+    return matchCompanyRules(text, payload.companyRules)
+      .concat(matchKeywordRules(text, payload.keywordRules))
+      .sort((a, b) => {
+        if (a.reviewRequired !== b.reviewRequired) return a.reviewRequired ? -1 : 1;
+        return Math.abs(b.scoreDelta) - Math.abs(a.scoreDelta);
+      });
+  }
+
+  function buildRulesApiUrl(rawUrl) {
+    const value = String(rawUrl || "").trim();
+    if (!value) return "";
+
+    try {
+      const url = new URL(value);
+      if (!url.searchParams.has("action")) url.searchParams.set("action", "rules");
+      return url.toString();
+    } catch (_error) {
+      return value.includes("?") ? `${value}&action=rules` : `${value}?action=rules`;
+    }
+  }
+
+  function isHtmlResponse(text) {
+    const preview = String(text || "").trim().slice(0, 120).toLowerCase();
+    return preview.startsWith("<!doctype") || preview.startsWith("<html") || preview.includes("<head");
+  }
+
+  function validateRulePayload(payload) {
+    if (!payload || payload.ok === false) {
+      throw new Error(payload && payload.message ? payload.message : "規則 API 回傳失敗");
+    }
+
+    if (!Array.isArray(payload.companyRules) || !Array.isArray(payload.keywordRules)) {
+      throw new Error("規則 API 格式不正確，缺少 companyRules 或 keywordRules。");
+    }
+
+    return payload;
+  }
+
+  function parseRulesApiResponse(response) {
+    const body = String(response.responseText || "").trim();
+    if (!body) throw new Error("規則 API 回傳空內容。");
+    if (isHtmlResponse(body)) {
+      throw new Error("規則 API 回傳 HTML，不是 JSON。請確認 Web App 權限是 Anyone with the link，且 URL 是 /exec?action=rules。");
+    }
+
+    try {
+      return validateRulePayload(JSON.parse(body));
+    } catch (error) {
+      throw new Error(`規則 API 回傳不是合法 JSON：${error.message || error}`);
+    }
+  }
+
+  function readCachedRules() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(SHARED_RULES_CACHE_KEY) || "null");
+      if (!cached || !cached.payload || !cached.fetchedAt) return null;
+      return cached;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function writeCachedRules(payload) {
+    localStorage.setItem(SHARED_RULES_CACHE_KEY, JSON.stringify({
+      fetchedAt: Date.now(),
+      payload
+    }));
+  }
+
+  function getPayloadTtlMs(payload) {
+    const seconds = Number(payload && payload.ttlSeconds) || DEFAULT_TTL_SECONDS;
+    return Math.max(10, seconds) * 1000;
+  }
+
+  function isCacheFresh(cached) {
+    return Date.now() - Number(cached.fetchedAt || 0) <= getPayloadTtlMs(cached.payload);
+  }
+
+  function applyCachedRules(cached, stale) {
+    sharedRuleState.payload = cached.payload;
+    sharedRuleState.fetchedAt = cached.fetchedAt;
+    sharedRuleState.stale = Boolean(stale);
+    sharedRuleState.statusMessage = stale ? "共用規則可能非最新，已暫用本機快取。" : "";
+  }
+
+  function requestRulesFromApi() {
+    return new Promise((resolve, reject) => {
+      if (!RULES_API_URL) {
+        reject(new Error("尚未設定 Apps Script 規則 API URL。"));
+        return;
+      }
+
+      if (typeof GM_xmlhttpRequest !== "function") {
+        reject(new Error("Tampermonkey 尚未提供 GM_xmlhttpRequest。"));
+        return;
+      }
+
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: buildRulesApiUrl(RULES_API_URL),
+        timeout: 15000,
+        onload: (response) => {
+          if (response.status < 200 || response.status >= 300) {
+            reject(new Error(`規則 API HTTP ${response.status}`));
+            return;
+          }
+
+          try {
+            resolve(parseRulesApiResponse(response));
+          } catch (error) {
+            reject(error);
+          }
+        },
+        ontimeout: () => reject(new Error("規則 API 逾時。")),
+        onerror: () => reject(new Error("規則 API 連線失敗。"))
+      });
+    });
+  }
+
+  async function loadSharedRules() {
+    const cached = readCachedRules();
+    if (cached) {
+      applyCachedRules(cached, !isCacheFresh(cached));
+      if (isCacheFresh(cached)) return;
+    }
+
+    try {
+      const payload = await requestRulesFromApi();
+      writeCachedRules(payload);
+      applyCachedRules({ payload, fetchedAt: Date.now() }, false);
+    } catch (error) {
+      if (cached) {
+        applyCachedRules(cached, true);
+        return;
+      }
+
+      sharedRuleState.payload = null;
+      sharedRuleState.statusMessage = `共用規則尚未載入，僅使用內建評分規則。（${error.message || error}）`;
+    }
+  }
+
   function extractResumeCode(value) {
     const match = normalizeText(value).match(/(?:代碼\s*[：:]?\s*)?(\d{8,})/);
     return match?.[1] || "";
@@ -442,6 +756,78 @@
     if (code) skippedCards.set(code, reason);
   }
 
+  function getCardReadableText(card) {
+    const clone = card.cloneNode(true);
+    clone.querySelectorAll("[data-resume-shared-rules-badges]").forEach((node) => node.remove());
+    return normalizeText(clone.textContent || "");
+  }
+
+  function ensureBadgeContainer(card) {
+    let container = card.querySelector("[data-resume-shared-rules-badges]");
+    if (container) return container;
+
+    container = document.createElement("div");
+    container.dataset.resumeSharedRulesBadges = "true";
+    const anchor = card.querySelector(".resume-card__center, .userInfo-wrap, .card-body") || card.firstElementChild;
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(container, anchor);
+    else card.insertBefore(container, card.firstChild);
+    return container;
+  }
+
+  function buildRuleBadgeText(match) {
+    const scoreText = match.scoreDelta > 0 ? `+${match.scoreDelta}` : String(match.scoreDelta || 0);
+    if (match.reviewRequired || match.category === "risk_gambling") return `博弈風險 ${scoreText}｜人工覆核`;
+    if (match.category === "positive_si" || match.label === "SI_VENDOR") return `SI ${scoreText}`;
+    return `${match.label || match.displayName} ${scoreText}`;
+  }
+
+  function buildRuleBadgeTitle(match) {
+    return [
+      `命中：${match.matchedTerm}`,
+      match.displayName ? `規則：${match.displayName}` : "",
+      match.confidence ? `可信度：${match.confidence}` : "",
+      match.note ? `備註：${match.note}` : "",
+      match.sourceUrl ? `來源：${match.sourceUrl}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
+  function renderRuleBadges(card, matches) {
+    const existing = card.querySelector("[data-resume-shared-rules-badges]");
+    if (!matches.length) {
+      if (existing) existing.remove();
+      return;
+    }
+
+    const container = ensureBadgeContainer(card);
+    const renderKey = matches
+      .slice(0, BADGE_LIMIT)
+      .map((match) => [match.id, match.matchedTerm, match.scoreDelta, match.lowConfidence].join(":"))
+      .join("|");
+    if (container.dataset.resumeSharedRulesRenderKey === renderKey) return;
+
+    container.dataset.resumeSharedRulesRenderKey = renderKey;
+    container.textContent = "";
+
+    matches.slice(0, BADGE_LIMIT).forEach((match) => {
+      const badge = document.createElement("span");
+      const isRisk = match.reviewRequired || match.category === "risk_gambling";
+      badge.className = [
+        "resume-shared-rule-badge",
+        isRisk ? "resume-shared-rule-badge--risk" : "resume-shared-rule-badge--positive",
+        match.lowConfidence ? "resume-shared-rule-badge--low" : ""
+      ].filter(Boolean).join(" ");
+      badge.textContent = buildRuleBadgeText(match);
+      badge.title = buildRuleBadgeTitle(match);
+      container.append(badge);
+    });
+  }
+
+  function getRuleHideReason(matches) {
+    if (RISK_ACTION !== "hide") return "";
+    const riskMatch = matches.find((match) => match.reviewRequired && !match.lowConfidence && match.category === "risk_gambling");
+    return riskMatch ? `命中博弈風險規則：${riskMatch.matchedTerm}` : "";
+  }
+
   function filterResumeCards() {
     if (!shouldHideCardsOnThisPage()) {
       restoreHiddenCards();
@@ -449,7 +835,12 @@
     }
     const cards = document.querySelectorAll(CARD_SELECTOR);
     for (const card of cards) {
-      const reason = card.dataset.resumeScreeningSkipped || getSkipReason(card);
+      const ruleMatches = matchRulesAgainstText(getCardReadableText(card));
+      renderRuleBadges(card, ruleMatches);
+      const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
+      const scoredItem = latestScoreByCode.get(code);
+      if (scoredItem) renderScoreBadge(card, scoredItem);
+      const reason = card.dataset.resumeScreeningSkipped || getSkipReason(card) || getRuleHideReason(ruleMatches);
       if (!reason) continue;
       rememberSkippedCard(card, reason);
       hideSkippedCard(card, reason);
@@ -562,9 +953,10 @@
   function extractCard(card) {
     const codeText = normalizeText(card.querySelector(CODE_SELECTOR)?.textContent);
     const jobLines = [...card.querySelectorAll(JOB_HISTORY_SELECTOR)].map((item) => normalizeText(item.textContent));
-    const allText = normalizeText(card.textContent);
+    const allText = getCardReadableText(card);
     const href = card.querySelector(PROFILE_LINK_SELECTOR)?.getAttribute("href") || "";
     const cardMeta = extractCardMeta(card);
+    const ruleMatches = matchRulesAgainstText(allText);
 
     return {
       resumeCode: extractResumeCode(codeText || card.id),
@@ -576,6 +968,7 @@
       education: normalizeText(card.querySelector(EDUCATION_SELECTOR)?.textContent),
       workExperience: normalizeText(card.querySelector(WORK_EXPERIENCE_SELECTOR)?.textContent),
       hasProjectAchievement: /專案|系統|平台|開發|導入|架構|後端|前端|api|db|database|spring|\.net|mssql|mysql|oracle|銀行|電信/i.test(allText),
+      ruleMatches,
       ...deriveGapSignals(jobLines),
       autobiographyMostlyPersonal: false,
       sameLevelYears: 0,
@@ -619,7 +1012,6 @@
   function hardRejectReasons(role, card, text) {
     const reasons = [];
     if (isAllEnglishName(card.candidateName)) reasons.push("姓名為全英文，略過外籍候選人");
-    if (includesAny(text, GAMBLING_KEYWORDS)) reasons.push("博弈/博彩/娛樂城相關公司，直接排除");
     const titleMismatchReason = nonWebDesiredTitleRejectReason(role, card);
     if (titleMismatchReason) reasons.push(titleMismatchReason);
     const mismatchReason = nonTargetEngineerRejectReason(role, card);
@@ -679,11 +1071,41 @@
     return null;
   }
 
+  function describeRuleMatch(match) {
+    return `${match.matchedTerm}${match.displayName && match.displayName !== match.matchedTerm ? `/${match.displayName}` : ""}`;
+  }
+
+  function riskFlagsForCard(card, text) {
+    const remoteRiskFlags = (card.ruleMatches || [])
+      .filter((match) => match.reviewRequired || match.category === "risk_gambling")
+      .map((match) => describeRuleMatch(match));
+    const keywordRiskFlags = countMatches(text, GAMBLING_KEYWORDS);
+    return [...new Set(remoteRiskFlags.concat(keywordRiskFlags))];
+  }
+
+  function positiveRuleMatchesForCard(card) {
+    return (card.ruleMatches || []).filter((match) => (
+      !match.reviewRequired &&
+      match.category !== "risk_gambling" &&
+      Number(match.scoreDelta || 0) > 0
+    ));
+  }
+
   function scoreCard(role, card) {
     const text = buildText(card);
+    const riskFlags = riskFlagsForCard(card, text);
     const rejectedReasons = hardRejectReasons(role, card, text);
     if (rejectedReasons.length) {
-      return { resumeCode: card.resumeCode, profileUrl: card.profileUrl || "", score: 0, status: "excluded", reasons: rejectedReasons };
+      return {
+        resumeCode: card.resumeCode,
+        profileUrl: card.profileUrl || "",
+        score: 0,
+        status: "excluded",
+        reasons: rejectedReasons,
+        ruleMatches: card.ruleMatches || [],
+        riskFlags,
+        cardElementAvailable: false
+      };
     }
 
     const factors = [];
@@ -709,6 +1131,15 @@
     score += addFactor(factors, "工程流程成熟度", Math.min(6, countMatches(text, ENGINEERING_PROCESS_KEYWORDS).length * 2), countMatches(text, ENGINEERING_PROCESS_KEYWORDS).join("、"));
     score += addFactor(factors, "專案深度", Math.min(7, countMatches(text, PROJECT_DEPTH_KEYWORDS).length * 1.5), countMatches(text, PROJECT_DEPTH_KEYWORDS).slice(0, 6).join("、"));
     score += addFactor(factors, "產業/專案背景", Math.min(7, countMatches(text, SOFTWARE_PROJECT_KEYWORDS).length * 2.5), countMatches(text, SOFTWARE_PROJECT_KEYWORDS).join("、"));
+
+    const positiveRuleMatches = positiveRuleMatchesForCard(card);
+    const positiveRulePoints = Math.min(8, positiveRuleMatches.reduce((sum, match) => sum + Number(match.scoreDelta || 0), 0));
+    score += addFactor(
+      factors,
+      "共用清單加分",
+      positiveRulePoints,
+      positiveRuleMatches.map(describeRuleMatch).slice(0, 6).join("、")
+    );
 
     if (workYears >= 10) {
       const penalty = Math.max(1, Math.floor(workYears - 9));
@@ -746,10 +1177,14 @@
       resumeCode: card.resumeCode,
       profileUrl: card.profileUrl || "",
       score: Math.max(0, Math.min(100, Math.round(score))),
-      status: "ranked",
+      status: riskFlags.length ? "review_required" : "ranked",
+      ruleMatches: card.ruleMatches || [],
+      riskFlags,
+      cardElementAvailable: false,
       reasons: factors
         .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
         .map((factor) => `${factor.label} ${factor.points > 0 ? "+" : ""}${Math.round(factor.points)}：${factor.details}`)
+        .concat(riskFlags.length ? [`人工覆核：${riskFlags.slice(0, 5).join("、")}`] : [])
         .slice(0, 8)
     };
   }
@@ -771,10 +1206,20 @@
       return counts;
     }, {});
     const ranked = scored
-      .filter((item) => item.status !== "excluded")
-      .sort((a, b) => b.score - a.score || a.resumeCode.localeCompare(b.resumeCode))
-      .slice(0, 20);
-    return { ranked, excludedCount, excludedReasonCounts, scoredCount: scored.length };
+      .filter((item) => item.status === "ranked")
+      .sort((a, b) => b.score - a.score || a.resumeCode.localeCompare(b.resumeCode));
+    const reviewRequired = scored
+      .filter((item) => item.status === "review_required")
+      .sort((a, b) => b.score - a.score || a.resumeCode.localeCompare(b.resumeCode));
+    return {
+      ranked,
+      reviewRequired,
+      excluded: excludedItems,
+      allResults: ranked.concat(reviewRequired).concat(excludedItems),
+      excludedCount,
+      excludedReasonCounts,
+      scoredCount: scored.length
+    };
   }
 
   function sleep(ms) {
@@ -809,6 +1254,82 @@
       if (card.resumeCode) cardsByCode.set(card.resumeCode, card);
     }
     return pageCards.length;
+  }
+
+  function currentCardElementsByCode() {
+    const map = new Map();
+    [...document.querySelectorAll(CARD_SELECTOR)].forEach((card) => {
+      const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
+      if (code) map.set(code, card);
+    });
+    return map;
+  }
+
+  function applyCardElementAvailability(items) {
+    const elementsByCode = currentCardElementsByCode();
+    return items.map((item) => ({
+      ...item,
+      cardElementAvailable: elementsByCode.has(item.resumeCode)
+    }));
+  }
+
+  function renderScoreBadge(card, item) {
+    const container = ensureBadgeContainer(card);
+    let badge = container.querySelector("[data-resume-score-badge]");
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.dataset.resumeScoreBadge = "true";
+      badge.className = "resume-screening-score-badge";
+      container.prepend(badge);
+    }
+    badge.textContent = item.status === "excluded" ? "排除" : `分數 ${item.score}`;
+    badge.title = item.reasons.slice(0, 5).join("\n");
+  }
+
+  function reorderLoadedCardsByScore(scoredItems) {
+    if (!ENABLE_INLINE_REORDER) return 0;
+    const scoreByCode = new Map(scoredItems.map((item) => [item.resumeCode, item]));
+    const cards = [...document.querySelectorAll(CARD_SELECTOR)]
+      .map((card, originalIndex) => {
+        const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
+        return {
+          card,
+          code,
+          originalIndex,
+          item: scoreByCode.get(code)
+        };
+      })
+      .filter((entry) => entry.code && entry.item && !entry.card.dataset.resumeScreeningSkipped && getComputedStyle(entry.card).display !== "none");
+
+    const groups = new Map();
+    cards.forEach((entry) => {
+      const parent = entry.card.parentElement;
+      if (!parent) return;
+      if (!groups.has(parent)) groups.set(parent, []);
+      groups.get(parent).push(entry);
+    });
+
+    let moved = 0;
+    groups.forEach((entries, parent) => {
+      const sorted = entries.slice().sort((a, b) => (
+        b.item.score - a.item.score ||
+        statusOrder(a.item.status) - statusOrder(b.item.status) ||
+        a.originalIndex - b.originalIndex
+      ));
+      sorted.forEach((entry) => {
+        parent.appendChild(entry.card);
+        renderScoreBadge(entry.card, entry.item);
+        moved += 1;
+      });
+    });
+
+    return moved;
+  }
+
+  function statusOrder(status) {
+    if (status === "ranked") return 0;
+    if (status === "review_required") return 1;
+    return 2;
   }
 
   function collectAndUpdateProgress(cardsByCode, totalCount) {
@@ -912,29 +1433,135 @@
     setSummary(progressText(cardsByCode, totalCount));
   }
 
+  function resultGroups() {
+    return {
+      ranked: latestRanked,
+      review: latestReviewRequired,
+      excluded: latestExcluded,
+      all: latestAllResults
+    };
+  }
+
+  function resultFilterLabel(filter) {
+    return {
+      ranked: "推薦",
+      review: "人工覆核",
+      excluded: "排除",
+      all: "全部"
+    }[filter] || "推薦";
+  }
+
+  function visibleResultItems() {
+    const groups = resultGroups();
+    const items = groups[currentResultFilter] || groups.ranked;
+    const start = (currentResultPage - 1) * RANKED_LIST_PAGE_SIZE;
+    return items.slice(start, start + RANKED_LIST_PAGE_SIZE);
+  }
+
+  function totalResultPages() {
+    const groups = resultGroups();
+    const items = groups[currentResultFilter] || groups.ranked;
+    return Math.max(1, Math.ceil(items.length / RANKED_LIST_PAGE_SIZE));
+  }
+
+  function renderFilterButton(filter, count) {
+    const active = currentResultFilter === filter;
+    return `<button data-result-filter="${filter}" style="height:28px;border:1px solid ${active ? "#b8eadc" : "#e7e0ef"};border-radius:8px;background:${active ? "#b8eadc" : "#fff"};color:#273044;font-weight:700;cursor:pointer;">${resultFilterLabel(filter)} ${count}</button>`;
+  }
+
+  function renderResultItem(item, absoluteIndex) {
+    const checked = selectedResumeCodes.has(item.resumeCode) ? "checked" : "";
+    const disabled = item.profileUrl ? "" : "disabled";
+    const statusLabel = item.status === "review_required" ? "人工覆核" : item.status === "excluded" ? "排除" : "推薦";
+    const statusColor = item.status === "review_required" ? "#fff2ee" : item.status === "excluded" ? "#f3f4f6" : "#ebfff6";
+    const statusBorder = item.status === "review_required" ? "#f5b5a8" : item.status === "excluded" ? "#d1d5db" : "#8dd6b6";
+    const cardMark = item.cardElementAvailable ? "目前頁" : "跨頁/未載入";
+    return `
+      <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:8px;">
+        <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;">
+          <input type="checkbox" data-result-select="${escapeHtml(item.resumeCode)}" ${checked} ${disabled} title="勾選後可批次開啟">
+          <div style="min-width:0;">
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+              <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer" style="font-weight:800;color:#5d4fb4;text-decoration:none;">${absoluteIndex}. ${escapeHtml(item.resumeCode)}</a>
+              <span style="border:1px solid ${statusBorder};border-radius:8px;background:${statusColor};padding:1px 6px;font-size:11px;font-weight:700;">${statusLabel}</span>
+              <span style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:1px 6px;font-size:11px;color:#6b7280;">${cardMark}</span>
+            </div>
+            <ul style="margin:6px 0 0;padding-left:18px;color:#6b7280;font-size:12px;">${item.reasons.slice(0, 5).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+          </div>
+          <strong style="background:#ffd7c2;border-radius:8px;padding:2px 8px;">${item.score}</strong>
+        </div>
+      </article>
+    `;
+  }
+
+  function attachResultEvents() {
+    resultNode.querySelectorAll("[data-result-filter]").forEach((button) => {
+      button.addEventListener("click", () => {
+        currentResultFilter = button.dataset.resultFilter || "ranked";
+        currentResultPage = 1;
+        renderResults();
+      });
+    });
+    resultNode.querySelectorAll("[data-result-page]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const nextPage = Number(button.dataset.resultPage || 1);
+        currentResultPage = Math.min(Math.max(nextPage, 1), totalResultPages());
+        renderResults();
+      });
+    });
+    resultNode.querySelectorAll("[data-result-select]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const code = input.dataset.resultSelect;
+        if (!code) return;
+        if (input.checked) selectedResumeCodes.add(code);
+        else selectedResumeCodes.delete(code);
+        updateOpenButtonLabel();
+      });
+    });
+  }
+
+  function updateOpenButtonLabel() {
+    if (!copyButton) return;
+    const count = selectedResumeCodes.size;
+    copyButton.textContent = count ? `開啟勾選 ${count}` : "開啟勾選";
+  }
+
   function renderResults(scanStats) {
-    const scannedCount = scanStats?.scannedCount || 0;
-    const excludedCount = scanStats?.excludedCount || 0;
+    const scannedCount = scanStats?.scannedCount || latestAllResults.length;
+    const excludedCount = scanStats?.excludedCount ?? latestExcluded.length;
     const excludedReasonCounts = scanStats?.excludedReasonCounts || {};
     const excludedReasonSummary = Object.entries(excludedReasonCounts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 2)
       .map(([reason, count]) => `${reason.replace("，直接排除", "")} ${count}`)
       .join("；");
-    resultNode.innerHTML = latestRanked.length ? latestRanked.map((item, index) => `
-      <article style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:8px;">
-        <div style="display:flex;justify-content:space-between;gap:8px;">
-          <a href="${item.profileUrl}" target="_blank" rel="noreferrer" style="font-weight:800;color:#5d4fb4;text-decoration:none;">${index + 1}. ${item.resumeCode}</a>
-          <strong style="background:#ffd7c2;border-radius:8px;padding:2px 8px;">${item.score}</strong>
-        </div>
-        <ul style="margin:6px 0 0;padding-left:18px;color:#6b7280;font-size:12px;">${item.reasons.slice(0, 4).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
-      </article>
-    `).join("") : `<div style="color:#6b7280;">沒有符合條件的候選人</div>`;
-    setSummary(`完成：入榜 ${latestRanked.length} · 可分析 ${scannedCount} · 硬排除 ${excludedCount} · 跳過 ${skippedCards.size}`);
+    const totalPages = totalResultPages();
+    const visibleItems = visibleResultItems();
+    const startIndex = (currentResultPage - 1) * RANKED_LIST_PAGE_SIZE;
+    resultNode.innerHTML = `
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+        ${renderFilterButton("ranked", latestRanked.length)}
+        ${renderFilterButton("review", latestReviewRequired.length)}
+        ${renderFilterButton("excluded", latestExcluded.length)}
+        ${renderFilterButton("all", latestAllResults.length)}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:#6b7280;font-size:12px;">
+        <span>${resultFilterLabel(currentResultFilter)}第 ${currentResultPage}/${totalPages} 頁，每頁 ${RANKED_LIST_PAGE_SIZE} 筆</span>
+        <span>已勾選 ${selectedResumeCodes.size} 筆</span>
+      </div>
+      ${visibleItems.length ? visibleItems.map((item, index) => renderResultItem(item, startIndex + index + 1)).join("") : `<div style="color:#6b7280;">沒有符合條件的候選人</div>`}
+      <div style="display:flex;justify-content:space-between;gap:8px;margin-top:8px;">
+        <button data-result-page="${currentResultPage - 1}" ${currentResultPage <= 1 ? "disabled" : ""} style="height:30px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:700;cursor:pointer;">上一頁</button>
+        <button data-result-page="${currentResultPage + 1}" ${currentResultPage >= totalPages ? "disabled" : ""} style="height:30px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:700;cursor:pointer;">下一頁</button>
+      </div>
+    `;
+    attachResultEvents();
+    updateOpenButtonLabel();
+    setSummary(`完成：推薦 ${latestRanked.length} · 人工覆核 ${latestReviewRequired.length} · 排除 ${excludedCount} · 跳過 ${skippedCards.size}`);
     setProgress(100, "完成");
-    const shortageNote = latestRanked.length < 20
-      ? `本次少於 20 筆，多半是可分析卡片不足或 ${excludedCount} 筆被硬性排除。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
-      : "點右下角「104 掃描」查看原因；按「開啟履歷」批次開啟前 20 名";
+    const shortageNote = latestRanked.length
+      ? `已依分數排序；可勾選後開啟履歷。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
+      : `沒有推薦候選人。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`;
     setStatus(shortageNote);
     setCollapsed(true);
   }
@@ -944,13 +1571,14 @@
   }
 
   async function openRankedProfiles() {
-    const profiles = latestRanked.filter((item) => item.profileUrl);
+    const selectedItems = latestAllResults.filter((item) => selectedResumeCodes.has(item.resumeCode) && item.profileUrl);
+    const profiles = DEFAULT_OPEN_LIMIT > 0 ? selectedItems.slice(0, DEFAULT_OPEN_LIMIT) : selectedItems;
     if (!profiles.length) {
-      setStatus("目前沒有可開啟的履歷");
+      setStatus("目前沒有勾選可開啟的履歷；請先在排名清單勾選。");
       return;
     }
     copyButton.disabled = true;
-    setStatus(`準備開啟 ${profiles.length} 個履歷分頁。Tampermonkey 無法自動命名 Chrome 分頁群組，請手動群組為「待看履歷」。`);
+    setStatus(`準備開啟 ${profiles.length} 個已勾選履歷分頁。`);
     for (const [index, item] of profiles.entries()) {
       GM_openInTab(item.profileUrl, {
         active: index === 0,
@@ -961,7 +1589,7 @@
       setProgress(Math.round(((index + 1) / profiles.length) * 100), `${index + 1}/${profiles.length}`);
       await sleep(180);
     }
-    setStatus(`已開啟 ${profiles.length} 個履歷分頁；可在 Chrome 分頁列手動加入群組「待看履歷」。`);
+    setStatus(`已開啟 ${profiles.length} 個已勾選履歷分頁。`);
     copyButton.disabled = false;
   }
 
@@ -972,7 +1600,16 @@
     startButton.disabled = true;
     skippedCards = new Map();
     latestRanked = [];
+    latestReviewRequired = [];
+    latestExcluded = [];
+    latestAllResults = [];
+    latestCardsByCode = new Map();
+    latestScoreByCode = new Map();
+    selectedResumeCodes = new Set();
+    currentResultFilter = "ranked";
+    currentResultPage = 1;
     resultNode.innerHTML = "";
+    updateOpenButtonLabel();
     setCollapsed(false);
     setProgress(0);
 
@@ -981,6 +1618,8 @@
     let noGrowthRounds = 0;
 
     try {
+      await loadSharedRules();
+      if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
       await waitForCards();
       await prepareScanPosition(cardsByCode);
       const totalCount = getTotalCount();
@@ -1010,12 +1649,20 @@
 
       const cards = [...cardsByCode.values()];
       const ranking = rankCandidates(cards);
-      latestRanked = ranking.ranked;
+      const scoredItems = ranking.allResults;
+      latestScoreByCode = new Map(scoredItems.map((item) => [item.resumeCode, item]));
+      const movedCards = reorderLoadedCardsByScore(scoredItems);
+      latestRanked = applyCardElementAvailability(ranking.ranked);
+      latestReviewRequired = applyCardElementAvailability(ranking.reviewRequired);
+      latestExcluded = applyCardElementAvailability(ranking.excluded);
+      latestAllResults = latestRanked.concat(latestReviewRequired).concat(latestExcluded);
+      latestCardsByCode = cardsByCode;
       renderResults({
         scannedCount: cards.length,
         excludedCount: ranking.excludedCount,
         excludedReasonCounts: ranking.excludedReasonCounts
       });
+      if (movedCards) setStatus(`已掃描並依分數重排目前頁 ${movedCards} 張卡片；跨頁結果請看右下角排名清單。`);
     } catch (error) {
       console.error(error);
       setStatus(`失敗：${error.message}`);
@@ -1027,6 +1674,9 @@
   }
 
   ensurePanel();
+  loadSharedRules().then(() => filterResumeCards()).catch((error) => {
+    console.warn("shared rules load failed", error);
+  });
 
   const observer = new MutationObserver(() => filterResumeCards());
   if (document.body) {
