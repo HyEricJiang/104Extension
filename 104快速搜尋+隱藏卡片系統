@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.resume-screening-system
-// @version      3.0.1
+// @version      3.0.2
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -38,6 +38,8 @@
   const BADGE_LIMIT = 4;
   const FILTER_DEBOUNCE_MS = 450;
   const FILTER_MAX_CARDS_PER_PASS = 40;
+  const SCAN_STALL_TIMEOUT_MS = 10000;
+  const PAGE_CHANGE_TIMEOUT_MS = 10000;
 
   const ROLE_RULES = {
     "java-programmer": {
@@ -157,7 +159,7 @@
       </button>
       <div data-screening-shell style="display:none;">
         <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 8px;padding:4px;border-radius:8px;cursor:move;user-select:none;">
-          <strong>104 履歷掃描 v3.0.1</strong>
+          <strong>104 履歷掃描 v3.0.2</strong>
           <button data-screening-toggle style="width:30px;height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:#5d4fb4;font-size:13px;font-weight:700;">待掃描</div>
@@ -1004,9 +1006,9 @@
   }
 
   function parseDurationMonths(text) {
-    if (text.includes("仍在職")) return null;
     const yearMatch = text.match(/(\d+)\s*年/);
     const monthMatch = text.match(/(\d+)\s*個月/);
+    if (!yearMatch && !monthMatch) return null;
     return (Number(yearMatch?.[1] || 0) * 12) + Number(monthMatch?.[1] || 0);
   }
 
@@ -1019,6 +1021,15 @@
   function monthDiff(fromDate, toDate) {
     if (!fromDate || !toDate) return 0;
     return Math.max(0, (toDate.getFullYear() - fromDate.getFullYear()) * 12 + (toDate.getMonth() - fromDate.getMonth()));
+  }
+
+  function formatMonths(months) {
+    const value = Math.max(0, Math.round(Number(months) || 0));
+    const years = Math.floor(value / 12);
+    const restMonths = value % 12;
+    if (years && restMonths) return `${years} 年 ${restMonths} 個月`;
+    if (years) return `${years} 年`;
+    return `${restMonths} 個月`;
   }
 
   function parseJobPeriod(text) {
@@ -1043,19 +1054,34 @@
   function deriveGapSignals(jobLines) {
     const periods = jobLines.map(parseJobPeriod).filter(Boolean);
     if (!periods.length) {
-      return { recentGapMonths: 0, repeatedShortGaps: false, gapReason: "" };
+      return { recentGapMonths: 0, repeatedShortGaps: false, gapReason: "", gapDetails: [] };
     }
 
     const today = new Date();
     const latest = periods[0];
     const recentGapMonths = latest.current ? 0 : monthDiff(latest.end, today);
+    const gapDetails = [];
     let gapCount = 0;
+
+    if (recentGapMonths >= 3) {
+      gapDetails.push({
+        label: "最近一份結束後",
+        months: recentGapMonths
+      });
+    }
 
     for (let index = 0; index < periods.length - 1; index += 1) {
       const newer = periods[index];
       const older = periods[index + 1];
       if (!older.end || !newer.start) continue;
-      if (monthDiff(older.end, newer.start) >= 3) gapCount += 1;
+      const gapMonths = monthDiff(older.end, newer.start);
+      if (gapMonths >= 3) {
+        gapCount += 1;
+        gapDetails.push({
+          label: `第 ${index + 1} 與第 ${index + 2} 份工作間`,
+          months: gapMonths
+        });
+      }
     }
 
     const allText = jobLines.join(" ");
@@ -1064,17 +1090,23 @@
     return {
       recentGapMonths,
       repeatedShortGaps: gapCount >= 2,
-      gapReason: hasReason ? "卡片工作經歷提到合理空窗原因" : ""
+      gapReason: hasReason ? "卡片工作經歷提到合理空窗原因" : "",
+      gapDetails
     };
   }
 
   function deriveStability(jobLines) {
     const completedDurations = jobLines.map(parseDurationMonths).filter((months) => Number.isFinite(months));
+    const recentTwo = completedDurations.slice(0, 2);
+    const recentThree = completedDurations.slice(0, 3);
     return {
       lastThreeJobsAllUnderOneYear: completedDurations.slice(0, 3).length === 3
         && completedDurations.slice(0, 3).every((months) => months <= 12),
       lastTwoJobsBothUnderThreeMonths: completedDurations.slice(0, 2).length === 2
-        && completedDurations.slice(0, 2).every((months) => months < 3)
+        && completedDurations.slice(0, 2).every((months) => months < 3),
+      lastTwoJobsBothUnderOneYear: recentTwo.length === 2 && recentTwo.every((months) => months < 12),
+      lastThreeJobsAllUnderTwoYears: recentThree.length === 3 && recentThree.every((months) => months <= 24),
+      recentJobDurations: recentThree
     };
   }
 
@@ -1212,6 +1244,93 @@
     return `${match.matchedTerm}${match.displayName && match.displayName !== match.matchedTerm ? `/${match.displayName}` : ""}`;
   }
 
+  function uniqueList(values) {
+    return [...new Set(values.map((value) => normalizeText(value)).filter(Boolean))];
+  }
+
+  function ruleDisplayName(match) {
+    return normalizeText(match.canonicalName || match.displayName || match.matchedTerm || match.label || match.id);
+  }
+
+  function positiveSiCompanyNames(card) {
+    return uniqueList((card.ruleMatches || [])
+      .filter((match) => !match.reviewRequired && match.category !== "risk_gambling" && Number(match.scoreDelta || 0) > 0)
+      .map(ruleDisplayName));
+  }
+
+  function gamblingRiskNames(card, riskFlags) {
+    const ruleNames = (card.ruleMatches || [])
+      .filter((match) => match.reviewRequired || match.category === "risk_gambling")
+      .map(ruleDisplayName);
+    return uniqueList(ruleNames.concat(riskFlags || []));
+  }
+
+  function gapDisplaySummary(card) {
+    const gaps = (card.gapDetails || []).filter((gap) => Number(gap.months) >= 3);
+    if (!gaps.length) return "";
+    const details = gaps
+      .slice(0, 4)
+      .map((gap) => `${gap.label} ${formatMonths(gap.months)}`)
+      .join("；");
+    return `空窗期過長：${gaps.length} 個空窗，${details}${card.gapReason ? `（${card.gapReason}）` : ""}`;
+  }
+
+  function stabilityDisplaySummary(card) {
+    const reasons = [];
+    const durationText = (card.recentJobDurations || []).map(formatMonths).join("、");
+    if (card.lastTwoJobsBothUnderOneYear) reasons.push(`最近兩份皆不滿一年${durationText ? `（${durationText}）` : ""}`);
+    if (card.lastThreeJobsAllUnderTwoYears) reasons.push(`最近三份皆兩年以下${durationText ? `（${durationText}）` : ""}`);
+    if (!reasons.length) return "";
+    return `工作不穩定：${reasons.join("；")}`;
+  }
+
+  function coreBonusSummary(factors) {
+    const allowedLabels = new Set([
+      "核心技術",
+      "框架/進階技術",
+      "資料庫經驗",
+      "前端/全端廣度",
+      "工程流程成熟度",
+      "專案深度",
+      "產業/專案背景",
+      "共用清單加分"
+    ]);
+    const summaries = factors
+      .filter((factor) => factor.points > 0 && allowedLabels.has(factor.label) && normalizeText(factor.details))
+      .sort((a, b) => b.points - a.points)
+      .slice(0, 4)
+      .map((factor) => `${factor.label}：${factor.details}`);
+    return summaries.length ? `核心加分項：${summaries.join("；")}` : "";
+  }
+
+  function penaltySummary(factors) {
+    const summaries = factors
+      .filter((factor) => factor.points < 0 && normalizeText(factor.details))
+      .sort((a, b) => a.points - b.points)
+      .slice(0, 3)
+      .map((factor) => `${factor.label} ${Math.round(factor.points)}：${factor.details}`);
+    return summaries.length ? `扣分項：${summaries.join("；")}` : "";
+  }
+
+  function buildDisplayReasons(card, factors = [], riskFlags = [], rejectedReasons = []) {
+    const lines = [];
+    const siNames = positiveSiCompanyNames(card);
+    const gamblingNames = gamblingRiskNames(card, riskFlags);
+    const gapSummary = gapDisplaySummary(card);
+    const stabilitySummary = stabilityDisplaySummary(card);
+    const penalty = penaltySummary(factors);
+    const bonus = coreBonusSummary(factors);
+
+    if (siNames.length) lines.push(`同業SI公司：${siNames.slice(0, 4).join("、")}`);
+    if (gamblingNames.length) lines.push(`博弈：疑似 ${gamblingNames.slice(0, 5).join("、")}`);
+    if (gapSummary) lines.push(gapSummary);
+    if (stabilitySummary) lines.push(stabilitySummary);
+    rejectedReasons.forEach((reason) => lines.push(`排除原因：${reason}`));
+    if (penalty) lines.push(penalty);
+    if (bonus) lines.push(bonus);
+    return uniqueList(lines).slice(0, 6);
+  }
+
   function riskFlagsForCard(card, text) {
     const remoteRiskFlags = (card.ruleMatches || [])
       .filter((match) => match.reviewRequired || match.category === "risk_gambling")
@@ -1239,6 +1358,7 @@
         score: 0,
         status: "excluded",
         reasons: rejectedReasons,
+        displayReasons: buildDisplayReasons(card, [], riskFlags, rejectedReasons),
         ruleMatches: card.ruleMatches || [],
         riskFlags,
         cardElementAvailable: false
@@ -1301,6 +1421,14 @@
       addFactor(factors, "工作間空窗", -8, "多段工作間隔超過 3 個月");
     }
 
+    if (card.lastTwoJobsBothUnderOneYear || card.lastThreeJobsAllUnderTwoYears) {
+      const stabilityReasons = [];
+      if (card.lastTwoJobsBothUnderOneYear) stabilityReasons.push("最近兩份皆不滿一年");
+      if (card.lastThreeJobsAllUnderTwoYears) stabilityReasons.push("最近三份皆兩年以下");
+      score -= 10;
+      addFactor(factors, "工作穩定性", -10, stabilityReasons.join("；"));
+    }
+
     if (includesAny(text, OVERQUALIFIED_KEYWORDS)) {
       score -= 8;
       addFactor(factors, "過於優秀風險", -8, "學歷或公司背景過於優秀");
@@ -1318,6 +1446,7 @@
       ruleMatches: card.ruleMatches || [],
       riskFlags,
       cardElementAvailable: false,
+      displayReasons: buildDisplayReasons(card, factors, riskFlags),
       reasons: factors
         .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
         .map((factor) => `${factor.label} ${factor.points > 0 ? "+" : ""}${Math.round(factor.points)}：${factor.details}`)
@@ -1487,9 +1616,14 @@
   }
 
   async function fastScrollToBottom(cardsByCode, totalCount) {
+    const startedAt = Date.now();
     let lastScrollY = -1;
     let stuckRounds = 0;
     while (!isNearBottom() && stuckRounds < 4 && !targetReached(cardsByCode, totalCount)) {
+      if (Date.now() - startedAt >= SCAN_STALL_TIMEOUT_MS) {
+        setStatus(`滾動等待超過 ${Math.round(SCAN_STALL_TIMEOUT_MS / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
+        break;
+      }
       collectAndUpdateProgress(cardsByCode, totalCount);
       window.scrollTo(0, Math.min(document.documentElement.scrollHeight, window.scrollY + Math.max(window.innerHeight * 2.8, 2200)));
       await sleep(FAST_SCROLL_DELAY_MS);
@@ -1501,9 +1635,16 @@
   }
 
   async function scrollUntilStable(cardsByCode, totalCount) {
+    const startedAt = Date.now();
+    let timedOut = false;
     let previousProcessed = -1;
     let stableRounds = 0;
     while (stableRounds < 3 && !targetReached(cardsByCode, totalCount)) {
+      if (Date.now() - startedAt >= SCAN_STALL_TIMEOUT_MS) {
+        setStatus(`等待下一批超過 ${Math.round(SCAN_STALL_TIMEOUT_MS / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
+        timedOut = true;
+        break;
+      }
       await fastScrollToBottom(cardsByCode, totalCount);
       const beforeWaitProcessed = processedCount(cardsByCode);
       setStatus(`快速到頁尾，等待下一批...${progressText(cardsByCode, totalCount)}`);
@@ -1516,6 +1657,7 @@
       else stableRounds = 0;
       previousProcessed = currentProcessed;
     }
+    return { timedOut };
   }
 
   function currentPageNumber() {
@@ -1541,11 +1683,13 @@
     nextButton.scrollIntoView({ block: "center" });
     await sleep(500);
     nextButton.click();
-    await sleep(2500);
-    for (let index = 0; index < 60; index += 1) {
+    await sleep(1200);
+    const deadline = Date.now() + PAGE_CHANGE_TIMEOUT_MS;
+    while (Date.now() < deadline) {
       if (currentCodeSignature() && currentCodeSignature() !== beforeCodes) return true;
       await sleep(500);
     }
+    setStatus(`等待第 ${currentPageNumber() + 1} 頁超過 ${Math.round(PAGE_CHANGE_TIMEOUT_MS / 1000)} 秒，先用目前已收集履歷結算。`);
     return false;
   }
 
@@ -1606,15 +1750,20 @@
     return `<button data-result-filter="${filter}" style="height:28px;border:1px solid ${active ? "#b8eadc" : "#e7e0ef"};border-radius:8px;background:${active ? "#b8eadc" : "#fff"};color:#273044;font-weight:700;cursor:pointer;">${resultFilterLabel(filter)} ${count}</button>`;
   }
 
+  function renderSelectionButton(action, label) {
+    return `<button data-select-action="${action}" style="height:28px;border:1px solid #e7e0ef;border-radius:8px;background:#fff;color:#273044;font-weight:700;cursor:pointer;">${label}</button>`;
+  }
+
   function renderResultItem(item, absoluteIndex) {
     const checked = selectedResumeCodes.has(item.resumeCode) ? "checked" : "";
     const disabled = item.profileUrl ? "" : "disabled";
+    const displayReasons = (item.displayReasons && item.displayReasons.length ? item.displayReasons : item.reasons || []).slice(0, 5);
     const statusLabel = item.status === "review_required" ? "人工覆核" : item.status === "excluded" ? "排除" : "推薦";
     const statusColor = item.status === "review_required" ? "#fff2ee" : item.status === "excluded" ? "#f3f4f6" : "#ebfff6";
     const statusBorder = item.status === "review_required" ? "#f5b5a8" : item.status === "excluded" ? "#d1d5db" : "#8dd6b6";
     const cardMark = item.cardElementAvailable ? "目前頁" : "跨頁/未載入";
     return `
-      <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:8px;">
+      <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:8px;cursor:${item.profileUrl ? "pointer" : "default"};" title="${item.profileUrl ? "點擊卡片可切換勾選" : ""}">
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;">
           <input type="checkbox" data-result-select="${escapeHtml(item.resumeCode)}" ${checked} ${disabled} title="勾選後可批次開啟">
           <div style="min-width:0;">
@@ -1623,12 +1772,41 @@
               <span style="border:1px solid ${statusBorder};border-radius:8px;background:${statusColor};padding:1px 6px;font-size:11px;font-weight:700;">${statusLabel}</span>
               <span style="border:1px solid #e7e0ef;border-radius:8px;background:#fff;padding:1px 6px;font-size:11px;color:#6b7280;">${cardMark}</span>
             </div>
-            <ul style="margin:6px 0 0;padding-left:18px;color:#6b7280;font-size:12px;">${item.reasons.slice(0, 5).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+            <ul style="margin:6px 0 0;padding-left:18px;color:#6b7280;font-size:12px;">${displayReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
           </div>
           <strong style="background:#ffd7c2;border-radius:8px;padding:2px 8px;">${item.score}</strong>
         </div>
       </article>
     `;
+  }
+
+  function visibleSelectableCodes() {
+    return visibleResultItems()
+      .filter((item) => item.profileUrl && item.resumeCode)
+      .map((item) => item.resumeCode);
+  }
+
+  function setVisibleSelection(selected) {
+    visibleSelectableCodes().forEach((code) => {
+      if (selected) selectedResumeCodes.add(code);
+      else selectedResumeCodes.delete(code);
+    });
+    renderResults();
+  }
+
+  function toggleResultSelection(code) {
+    const input = resultNode.querySelector(`[data-result-select="${CSS.escape(code)}"]`);
+    if (!input || input.disabled) return;
+    input.checked = !input.checked;
+    if (input.checked) selectedResumeCodes.add(code);
+    else selectedResumeCodes.delete(code);
+    updateSelectionUi();
+  }
+
+  function updateSelectionUi() {
+    updateOpenButtonLabel();
+    const selectedCountNode = resultNode?.querySelector("[data-selected-count]");
+    if (selectedCountNode) selectedCountNode.textContent = `已勾選 ${selectedResumeCodes.size} 筆`;
   }
 
   function attachResultEvents() {
@@ -1646,13 +1824,26 @@
         renderResults();
       });
     });
+    resultNode.querySelectorAll("[data-select-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.selectAction === "select-page") setVisibleSelection(true);
+        if (button.dataset.selectAction === "clear-page") setVisibleSelection(false);
+      });
+    });
     resultNode.querySelectorAll("[data-result-select]").forEach((input) => {
       input.addEventListener("change", () => {
         const code = input.dataset.resultSelect;
         if (!code) return;
         if (input.checked) selectedResumeCodes.add(code);
         else selectedResumeCodes.delete(code);
-        updateOpenButtonLabel();
+        updateSelectionUi();
+      });
+    });
+    resultNode.querySelectorAll("[data-result-item]").forEach((card) => {
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("a,button,input,label")) return;
+        const code = card.dataset.resultItem;
+        if (code) toggleResultSelection(code);
       });
     });
   }
@@ -1682,9 +1873,13 @@
         ${renderFilterButton("excluded", latestExcluded.length)}
         ${renderFilterButton("all", latestAllResults.length)}
       </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+        ${renderSelectionButton("select-page", "本頁全勾")}
+        ${renderSelectionButton("clear-page", "本頁全不勾")}
+      </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:#6b7280;font-size:12px;">
         <span>${resultFilterLabel(currentResultFilter)}第 ${currentResultPage}/${totalPages} 頁，每頁 ${RANKED_LIST_PAGE_SIZE} 筆</span>
-        <span>已勾選 ${selectedResumeCodes.size} 筆</span>
+        <span data-selected-count>已勾選 ${selectedResumeCodes.size} 筆</span>
       </div>
       ${visibleItems.length ? visibleItems.map((item, index) => renderResultItem(item, startIndex + index + 1)).join("") : `<div style="color:#6b7280;">沒有符合條件的候選人</div>`}
       <div style="display:flex;justify-content:space-between;gap:8px;margin-top:8px;">
@@ -1770,7 +1965,8 @@
           const progress = progressText(cardsByCode, totalCount);
           setSummary(progress);
           setStatus(`連續掃描中...${progress}`);
-          await scrollUntilStable(cardsByCode, totalCount);
+          const stableResult = await scrollUntilStable(cardsByCode, totalCount);
+          if (stableResult?.timedOut) break;
           if (targetReached(cardsByCode, totalCount)) break;
           const autoGenerated = await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
           if (!autoGenerated && !targetReached(cardsByCode, totalCount)) {
