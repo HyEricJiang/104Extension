@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>掃描卡片系統安裝教學</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --surface: #ffffff;
+      --surface-soft: #eef6f3;
+      --ink: #17212b;
+      --muted: #5d6978;
+      --line: #dce3ea;
+      --primary: #176b5b;
+      --primary-strong: #0f5145;
+      --accent: #2f64d6;
+      --warning: #a15c05;
+      --shadow: 0 18px 50px rgba(23, 33, 43, 0.1);
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, #eaf2f7 0, rgba(234, 242, 247, 0) 330px),
+        var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      line-height: 1.65;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .page {
+      width: min(1060px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 48px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 24px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+
+    .hero-main,
+    .hero-aside,
+    .panel,
+    .step,
+    .notice {
+      background: var(--surface);
+      border: 1px solid rgba(220, 227, 234, 0.95);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .hero-main {
+      padding: 34px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      color: var(--primary-strong);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      max-width: 780px;
+      margin-bottom: 12px;
+      font-size: clamp(32px, 6vw, 52px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-bottom: 14px;
+      font-size: 24px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: 18px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 700px;
+      margin-bottom: 22px;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .button {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 10px 14px;
+      color: #ffffff;
+      background: var(--primary);
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      background: var(--primary-strong);
+      box-shadow: 0 10px 22px rgba(15, 81, 69, 0.18);
+    }
+
+    .button.secondary {
+      color: var(--ink);
+      background: #ffffff;
+      border-color: var(--line);
+    }
+
+    .button.secondary:hover {
+      background: #f7fafc;
+      box-shadow: 0 10px 22px rgba(23, 33, 43, 0.08);
+    }
+
+    .button.blue {
+      background: var(--accent);
+    }
+
+    .button.blue:hover {
+      background: #254fa9;
+    }
+
+    .button:focus-visible,
+    a:focus-visible {
+      outline: 3px solid rgba(47, 100, 214, 0.32);
+      outline-offset: 2px;
+    }
+
+    .hero-aside {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 22px;
+      background: var(--surface-soft);
+    }
+
+    .status-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .status-list li {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 10px;
+      align-items: start;
+      color: #24313d;
+      font-weight: 650;
+    }
+
+    .mark {
+      display: inline-flex;
+      width: 26px;
+      height: 26px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      color: #ffffff;
+      background: var(--primary);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .small {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .copy-status {
+      min-height: 22px;
+      margin: 12px 0 0;
+      color: var(--primary-strong);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .step {
+      padding: 22px;
+      box-shadow: none;
+    }
+
+    .step-number {
+      display: inline-flex;
+      min-width: 34px;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+      border-radius: 50%;
+      color: #ffffff;
+      background: var(--ink);
+      font-weight: 800;
+    }
+
+    .step ol,
+    .panel ol,
+    .panel ul {
+      margin: 0;
+      padding-left: 22px;
+    }
+
+    .step li,
+    .panel li {
+      margin: 8px 0;
+    }
+
+    code {
+      display: inline-block;
+      border: 1px solid #d3dce6;
+      border-radius: 5px;
+      padding: 1px 6px;
+      color: #24313d;
+      background: #f4f7fa;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .panel {
+      padding: 24px;
+      box-shadow: none;
+    }
+
+    .script-box {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #f9fbfd;
+    }
+
+    .script-url {
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .notice {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      align-items: start;
+      margin-top: 16px;
+      padding: 18px;
+      color: #4b3006;
+      background: #fff8ed;
+      border-color: #f1d6aa;
+      box-shadow: none;
+    }
+
+    .notice-icon {
+      display: inline-flex;
+      width: 42px;
+      height: 42px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      color: #ffffff;
+      background: var(--warning);
+      font-weight: 800;
+    }
+
+    .footer {
+      margin-top: 30px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 980px) {
+      .steps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 860px) {
+      .hero,
+      .steps,
+      .script-box {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-main {
+        padding: 26px;
+      }
+
+      .script-box .button {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .page {
+        width: min(100% - 22px, 1060px);
+        padding-top: 18px;
+      }
+
+      .hero-main,
+      .hero-aside,
+      .panel,
+      .step {
+        padding: 18px;
+      }
+
+      .actions .button {
+        width: 100%;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      .button {
+        display: none;
+      }
+
+      .page {
+        width: 100%;
+        padding: 0;
+      }
+
+      .hero-main,
+      .hero-aside,
+      .panel,
+      .step,
+      .notice {
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-main">
+        <div class="eyebrow">新人安裝指南</div>
+        <h1 id="page-title">掃描卡片系統安裝教學</h1>
+        <p class="lead">請依序完成 Chrome 擴充功能安裝、開啟使用者指令碼權限、貼上公司腳本、重新整理頁面。整個流程約 5 分鐘。</p>
+        <div class="actions" aria-label="主要操作">
+          <a class="button" href="https://chromewebstore.google.com/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo" target="_blank" rel="noopener noreferrer">安裝 Tampermonkey</a>
+          <button class="button secondary" type="button" id="copyExtensionsUrlButton">複製擴充功能管理網址</button>
+          <a class="button blue" href="https://github.com/HyEricJiang/104Extension/blob/main/104%E5%BF%AB%E9%80%9F%E6%90%9C%E5%B0%8B%2B%E9%9A%B1%E8%97%8F%E5%8D%A1%E7%89%87%E7%B3%BB%E7%B5%B1" target="_blank" rel="noopener noreferrer">開啟公司腳本</a>
+        </div>
+        <p class="copy-status" id="copyExtensionsUrlStatus" aria-live="polite">Chrome 內部管理頁需貼到網址列開啟，無法從一般網頁直接跳轉。</p>
+      </div>
+
+      <aside class="hero-aside" aria-label="完成確認">
+        <div>
+          <h2>完成後確認</h2>
+          <ul class="status-list">
+            <li><span class="mark">1</span><span>Tampermonkey 已安裝並固定在 Chrome 工具列</span></li>
+            <li><span class="mark">2</span><span>「允許使用者指令碼」已打開</span></li>
+            <li><span class="mark">3</span><span>公司腳本已完整貼上並儲存</span></li>
+            <li><span class="mark">4</span><span>腳本狀態為啟用，掃描卡片頁面已重新整理</span></li>
+          </ul>
+        </div>
+        <p class="small">建議使用 Google Chrome 操作。若畫面與教學不同，請先截圖回報系統窗口。</p>
+      </aside>
+    </section>
+
+    <section class="section steps" aria-label="安裝步驟">
+      <article class="step">
+        <span class="step-number">1</span>
+        <h2>安裝篡改猴</h2>
+        <ol>
+          <li>點上方「安裝 Tampermonkey」。</li>
+          <li>確認頁面名稱為 Tampermonkey。</li>
+          <li>點選「加到 Chrome」或「Add to Desktop」。</li>
+          <li>跳出確認視窗後，點選「新增擴充功能」。</li>
+          <li>點 Chrome 右上角拼圖圖示，將 Tampermonkey 固定在工具列。</li>
+        </ol>
+      </article>
+
+      <article class="step">
+        <span class="step-number">2</span>
+        <h2>開啟腳本權限</h2>
+        <ol>
+          <li>點上方「複製擴充功能管理網址」，貼到 Chrome 網址列後按 Enter；也可以手動輸入 <code>chrome://extensions/</code>。</li>
+          <li>找到 Tampermonkey 或「篡改猴」卡片。</li>
+          <li>點卡片左下角「詳細資料」。</li>
+          <li>往下找到「允許使用者指令碼」。</li>
+          <li>將右側開關打開，確認開關變成藍色或啟用狀態。</li>
+        </ol>
+      </article>
+
+      <article class="step">
+        <span class="step-number">3</span>
+        <h2>貼上公司腳本</h2>
+        <ol>
+          <li>點 Tampermonkey 圖示。</li>
+          <li>選擇「管理面板」或「Dashboard」。</li>
+          <li>點選「＋」新增腳本。</li>
+          <li>刪除畫面中原本的範例程式碼。</li>
+          <li>開啟公司腳本，複製完整內容後貼上。</li>
+          <li>Windows 按 Ctrl + S，Mac 按 Command + S 儲存。</li>
+        </ol>
+      </article>
+
+      <article class="step">
+        <span class="step-number">4</span>
+        <h2>確認功能</h2>
+        <ol>
+          <li>回到 Tampermonkey 管理面板。</li>
+          <li>確認腳本狀態為「已啟用」。</li>
+          <li>開啟或重新整理掃描卡片系統頁面。</li>
+          <li>確認頁面上出現卡片篩選或隱藏相關功能。</li>
+        </ol>
+      </article>
+    </section>
+
+    <section class="section panel" aria-labelledby="script-title">
+      <h2 id="script-title">公司腳本連結</h2>
+      <div class="script-box">
+        <div>
+          <h3>104 快速搜尋 + 隱藏卡片系統</h3>
+          <p class="script-url">https://github.com/HyEricJiang/104Extension/blob/main/104%E5%BF%AB%E9%80%9F%E6%90%9C%E5%B0%8B%2B%E9%9A%B1%E8%97%8F%E5%8D%A1%E7%89%87%E7%B3%BB%E7%B5%B1</p>
+        </div>
+        <a class="button blue" href="https://github.com/HyEricJiang/104Extension/blob/main/104%E5%BF%AB%E9%80%9F%E6%90%9C%E5%B0%8B%2B%E9%9A%B1%E8%97%8F%E5%8D%A1%E7%89%87%E7%B3%BB%E7%B5%B1" target="_blank" rel="noopener noreferrer">開啟腳本</a>
+      </div>
+      <div class="notice">
+        <span class="notice-icon">!</span>
+        <div>
+          <h3>貼上時請注意</h3>
+          <p>請複製完整腳本內容，不要只複製 GitHub 網址。若 GitHub 頁面有「Raw」按鈕，可以先點 Raw，再全選並複製內容。第一次使用前也請確認 Tampermonkey 詳細資料中的「允許使用者指令碼」已打開。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel" aria-labelledby="trouble-title">
+      <h2 id="trouble-title">常見狀況排除</h2>
+      <ul>
+        <li>找不到 Tampermonkey：請點 Chrome 右上角拼圖圖示，確認是否已安裝。</li>
+        <li>無法執行腳本：請到 <code>chrome://extensions/</code> 找到 Tampermonkey，進入「詳細資料」並打開「允許使用者指令碼」。</li>
+        <li>找不到新增腳本：請進入 Tampermonkey 的管理面板，再點選「＋」。</li>
+        <li>功能沒有出現：請確認腳本已儲存、狀態已啟用，並重新整理掃描卡片系統頁面。</li>
+        <li>仍無法使用：請截圖目前畫面，回報 HR 或系統窗口協助確認。</li>
+      </ul>
+    </section>
+
+    <p class="footer">掃描卡片系統安裝教學｜適用 Google Chrome + Tampermonkey</p>
+  </main>
+  <script>
+    const EXTENSIONS_PAGE_URL = "chrome://extensions/";
+    const copyExtensionsUrlButton = document.getElementById("copyExtensionsUrlButton");
+    const copyExtensionsUrlStatus = document.getElementById("copyExtensionsUrlStatus");
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.setAttribute("readonly", "");
+      helper.style.position = "fixed";
+      helper.style.left = "-9999px";
+      document.body.appendChild(helper);
+      helper.select();
+      document.execCommand("copy");
+      document.body.removeChild(helper);
+    }
+
+    copyExtensionsUrlButton.addEventListener("click", async () => {
+      try {
+        await copyTextToClipboard(EXTENSIONS_PAGE_URL);
+        copyExtensionsUrlStatus.textContent = "已複製 chrome://extensions/，請貼到 Chrome 網址列後按 Enter。";
+      } catch (error) {
+        copyExtensionsUrlStatus.textContent = "請手動複製 chrome://extensions/，貼到 Chrome 網址列後按 Enter。";
+      }
+    });
+  </script>
+</body>
+</html>
