@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.resume-screening-system
-// @version      3.0.3
+// @version      3.0.4
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -24,8 +24,11 @@
   const WORK_EXPERIENCE_SELECTOR = '[data-qa-id="cardWorkExperience"]';
   const JOB_HISTORY_SELECTOR = ".content-list li";
   const PAGE_SIZE = 50;
-  const FAST_SCROLL_DELAY_MS = 90;
-  const BOTTOM_LOAD_WAIT_MS = 2300;
+  const FAST_SCROLL_DELAY_MS = 110;
+  const BOTTOM_LOAD_WAIT_MS = 3200;
+  const BOTTOM_STABLE_ROUNDS = 5;
+  const FINAL_BOTTOM_SETTLE_ROUNDS = 4;
+  const SCROLL_HEIGHT_STABLE_ROUNDS = 2;
   const MONTHS_TO_HIDE = 3;
   const PANEL_POSITION_KEY = "resume-screening-104-panel-position";
   const RULES_API_URL = "https://script.google.com/macros/s/AKfycbxcXDndkNeJAdfvUbk_C-AQjW7P5u7jPW7oTR_rV0IOb6Ddrp9ehg4QDbXC7Ajufh3h/exec";
@@ -38,8 +41,9 @@
   const BADGE_LIMIT = 4;
   const FILTER_DEBOUNCE_MS = 450;
   const FILTER_MAX_CARDS_PER_PASS = 40;
-  const SCAN_STALL_TIMEOUT_MS = 10000;
-  const PAGE_CHANGE_TIMEOUT_MS = 10000;
+  const SCAN_STALL_TIMEOUT_MS = 22000;
+  const PAGE_CHANGE_TIMEOUT_MS = 14000;
+  const LOW_QUALITY_MAX_NORMALIZED_SCORE = 24;
   const UI = Object.freeze({
     navy: "#0f2742",
     navyHover: "#183b61",
@@ -100,7 +104,20 @@
 
   const GAMBLING_KEYWORDS = ["博弈", "博彩", "娛樂城", "線上賭", "casino", "betting", "gaming platform"];
   const SOFTWARE_PROJECT_KEYWORDS = ["si", "系統整合", "軟體專案", "專案開發", "web application", "銀行", "電信"];
-  const OVERQUALIFIED_KEYWORDS = ["台大", "清大", "交大", "成大", "政大", "國外大學", "碩士", "博士", "上市", "上櫃", "外商"];
+  const PRESTIGE_EDUCATION_KEYWORDS = [
+    "台大", "臺大", "台灣大學", "臺灣大學", "國立台灣大學", "國立臺灣大學", "ntu",
+    "清大", "清華大學", "國立清華大學", "nthu",
+    "交大", "交通大學", "陽明交通大學", "國立交通大學", "國立陽明交通大學", "nctu", "nycu",
+    "政大", "政治大學", "國立政治大學", "nccu",
+    "成大", "成功大學", "國立成功大學", "ncku",
+    "國外大學", "外國大學", "海外大學", "美國大學", "英國大學", "日本大學", "加拿大大學", "澳洲大學"
+  ];
+  const LARGE_COMPANY_KEYWORDS = [
+    "500人以上", "五百人以上", "員工500", "員工 500", "員工人數500", "員工人數 500",
+    "1000人以上", "一千人以上", "千人以上", "大型企業", "大型公司", "上市", "上櫃", "外商",
+    "資本額10億", "資本額 10億", "資本額百億", "資本額 百億"
+  ];
+  const OVERQUALIFIED_KEYWORDS = ["碩士", "博士"].concat(PRESTIGE_EDUCATION_KEYWORDS, LARGE_COMPANY_KEYWORDS);
   const ASSISTANT_STAGNATION_KEYWORDS = ["助理", "副理", "副工程師", "assistant"];
   const FRONTEND_KEYWORDS = ["vue", "react", "angular", "javascript", "typescript", "html", "css", "jquery"];
   const DATABASE_KEYWORDS = ["mssql", "ms sql", "sql server", "mysql", "oracle", "postgres", "資料庫", "db"];
@@ -143,6 +160,7 @@
     stale: false,
     statusMessage: ""
   };
+  let sharedRulesRefreshPromise = null;
 
   function mountPanel() {
     if (panel || !document.body) return;
@@ -174,9 +192,9 @@
         <span style="font-size:18px;">104</span>
         <span style="font-size:11px;">掃描</span>
       </button>
-      <div data-screening-shell style="display:none;">
-        <div data-screening-header style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v3.0.3</strong>
+      <div data-screening-shell style="display:none;min-height:0;">
+        <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v3.0.4</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -194,7 +212,7 @@
           <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
           <button data-screening-copy style="height:36px;border:1px solid ${UI.borderStrong};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;">開啟勾選</button>
         </div>
-        <div data-screening-body style="display:none;">
+        <div data-screening-body style="display:none;min-height:0;overflow:auto;padding-right:2px;">
           <div data-screening-results style="display:grid;gap:8px;"></div>
         </div>
       </div>
@@ -248,15 +266,19 @@
     isCollapsed = nextCollapsed;
     if (!bodyNode || !launcherButton || !shellNode || !toggleButton || !panel) return;
     launcherButton.style.display = isCollapsed ? "flex" : "none";
-    shellNode.style.display = isCollapsed ? "none" : "block";
+    shellNode.style.display = isCollapsed ? "none" : "flex";
+    shellNode.style.flexDirection = "column";
+    shellNode.style.minHeight = "0";
+    shellNode.style.maxHeight = isCollapsed ? "64px" : "calc(76vh - 24px)";
     bodyNode.style.display = isCollapsed ? "none" : "block";
+    bodyNode.style.maxHeight = isCollapsed ? "0" : "max(180px, calc(76vh - 190px))";
     toggleButton.textContent = "－";
     panel.style.width = isCollapsed ? "64px" : "420px";
     panel.style.height = isCollapsed ? "64px" : "auto";
     panel.style.maxHeight = isCollapsed ? "64px" : "76vh";
     panel.style.padding = isCollapsed ? "0" : "12px";
     panel.style.borderRadius = isCollapsed ? "999px" : "8px";
-    panel.style.overflow = isCollapsed ? "visible" : "auto";
+    panel.style.overflow = isCollapsed ? "visible" : "hidden";
     if (isCollapsed) {
       panel.style.left = "auto";
       panel.style.top = "auto";
@@ -664,17 +686,43 @@
     });
   }
 
+  async function refreshSharedRulesInBackground() {
+    if (sharedRulesRefreshPromise) return sharedRulesRefreshPromise;
+    sharedRulesRefreshPromise = requestRulesFromApi()
+      .then((payload) => {
+        writeCachedRules(payload);
+        applyCachedRules({ payload, fetchedAt: Date.now() }, false);
+        return payload;
+      })
+      .catch((error) => {
+        if (!sharedRuleState.payload) {
+          sharedRuleState.statusMessage = `共用規則尚未載入，僅使用內建評分規則。（${error.message || error}）`;
+        } else {
+          sharedRuleState.stale = true;
+          sharedRuleState.statusMessage = `共用規則更新失敗，已暫用本機快取。（${error.message || error}）`;
+        }
+        throw error;
+      })
+      .finally(() => {
+        sharedRulesRefreshPromise = null;
+      });
+    return sharedRulesRefreshPromise;
+  }
+
   async function loadSharedRules() {
     const cached = readCachedRules();
     if (cached) {
       applyCachedRules(cached, !isCacheFresh(cached));
-      if (isCacheFresh(cached)) return;
+      if (!isCacheFresh(cached)) {
+        refreshSharedRulesInBackground().catch((error) => {
+          console.warn("shared rules background refresh failed", error);
+        });
+      }
+      return;
     }
 
     try {
-      const payload = await requestRulesFromApi();
-      writeCachedRules(payload);
-      applyCachedRules({ payload, fetchedAt: Date.now() }, false);
+      await refreshSharedRulesInBackground();
     } catch (error) {
       if (cached) {
         applyCachedRules(cached, true);
@@ -1364,6 +1412,130 @@
     ));
   }
 
+  function clientScoringConfig() {
+    return (sharedRuleState.payload && sharedRuleState.payload.clientScoring) || {};
+  }
+
+  function clientConfigNumber(group, key, fallback) {
+    const value = Number(clientScoringConfig()?.[group]?.[key]);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function clientTimingValue(key, fallback) {
+    const value = Number(clientScoringConfig()?.scanTiming?.[key]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  }
+
+  function clientPenaltyValue(key, fallback) {
+    return clientConfigNumber("penalties", key, fallback);
+  }
+
+  function clientKeywordList(key, fallback) {
+    const values = clientScoringConfig()?.specialFlags?.[key];
+    if (!Array.isArray(values) || !values.length) return fallback;
+    return uniqueList(values.concat(fallback));
+  }
+
+  function lowQualityMaxNormalizedScore() {
+    return Math.max(0, clientConfigNumber("scoreNormalization", "lowQualityMaxScore", LOW_QUALITY_MAX_NORMALIZED_SCORE));
+  }
+
+  function meaningfulBonusLabels() {
+    return new Set([
+      "職務核心職能",
+      "核心技術",
+      "框架/進階技術",
+      "職位關鍵字覆蓋",
+      "資料庫經驗",
+      "前端/全端廣度",
+      "工程流程成熟度",
+      "專案深度",
+      "產業/專案背景",
+      "共用清單加分"
+    ]);
+  }
+
+  function hasMeaningfulPositiveSignals(factors) {
+    const labels = meaningfulBonusLabels();
+    return factors.some((factor) => factor.points > 0 && labels.has(factor.label));
+  }
+
+  function uniqueMatches(text, keywords) {
+    return uniqueList(countMatches(text, keywords));
+  }
+
+  function erfApprox(value) {
+    const sign = value < 0 ? -1 : 1;
+    const x = Math.abs(value);
+    const t = 1 / (1 + 0.3275911 * x);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+    return sign * y;
+  }
+
+  function normalCdf(value) {
+    return 0.5 * (1 + erfApprox(value / Math.SQRT2));
+  }
+
+  function rawScoreOf(item) {
+    const value = Number(item.rawScore);
+    return Number.isFinite(value) ? value : Number(item.score || 0);
+  }
+
+  function candidateTieBreaker(a, b) {
+    return String(a.candidateName || a.resumeCode || "").localeCompare(String(b.candidateName || b.resumeCode || ""));
+  }
+
+  function qualityAdjustedScore(normalizedScore, item) {
+    if (item.status === "excluded") return 0;
+    let score = clamp(Math.round(normalizedScore), 0, 100);
+    if (item.qualityFlags && item.qualityFlags.noMeaningfulPositiveSignals) {
+      score = Math.min(score, lowQualityMaxNormalizedScore());
+    }
+    return score;
+  }
+
+  function applyScanScoreDistribution(scoredItems) {
+    const eligible = scoredItems.filter((item) => item.status !== "excluded");
+    if (!eligible.length) return scoredItems;
+
+    if (eligible.length === 1) {
+      const item = eligible[0];
+      item.score = qualityAdjustedScore(rawScoreOf(item), item);
+      item.distributionScore = item.score;
+      return scoredItems;
+    }
+
+    const rawScores = eligible.map(rawScoreOf);
+    const mean = rawScores.reduce((sum, score) => sum + score, 0) / rawScores.length;
+    const variance = rawScores.reduce((sum, score) => sum + Math.pow(score - mean, 2), 0) / rawScores.length;
+    const standardDeviation = Math.sqrt(variance);
+
+    if (!standardDeviation) {
+      eligible
+        .slice()
+        .sort(candidateTieBreaker)
+        .forEach((item, index) => {
+          const rankScore = eligible.length === 1 ? 100 : (index / (eligible.length - 1)) * 100;
+          item.score = qualityAdjustedScore(rankScore, item);
+          item.distributionScore = item.score;
+        });
+      return scoredItems;
+    }
+
+    const cdfScores = eligible.map((item) => normalCdf((rawScoreOf(item) - mean) / standardDeviation));
+    const minCdf = Math.min.apply(null, cdfScores);
+    const maxCdf = Math.max.apply(null, cdfScores);
+    const range = maxCdf - minCdf || 1;
+
+    eligible.forEach((item, index) => {
+      const normalizedScore = ((cdfScores[index] - minCdf) / range) * 100;
+      item.score = qualityAdjustedScore(normalizedScore, item);
+      item.distributionScore = item.score;
+    });
+
+    return scoredItems;
+  }
+
   function scoreCard(role, card) {
     const text = buildText(card);
     const riskFlags = riskFlagsForCard(card, text);
@@ -1371,8 +1543,11 @@
     if (rejectedReasons.length) {
       return {
         resumeCode: card.resumeCode,
+        candidateName: card.candidateName || "",
+        currentTitle: card.currentTitle || "",
         profileUrl: card.profileUrl || "",
         score: 0,
+        rawScore: 0,
         status: "excluded",
         reasons: rejectedReasons,
         displayReasons: buildDisplayReasons(card, [], riskFlags, rejectedReasons),
@@ -1383,7 +1558,7 @@
     }
 
     const factors = [];
-    let score = 48;
+    let score = 36;
     const recentText = recentExperienceText(card, 2);
     const focusedText = roleFocusedText(card, 4);
     const workYears = parseWorkYears(card);
@@ -1425,30 +1600,58 @@
 
     if (card.recentGapMonths >= 3 && !card.gapReason) {
       const penalty = card.recentGapMonths >= 18
-        ? 22
+        ? Math.abs(clientPenaltyValue("recentGapMonths18Plus", -34))
         : card.recentGapMonths >= 12
-          ? 18
-          : Math.min(15, 5 + card.recentGapMonths);
+          ? Math.abs(clientPenaltyValue("recentGapMonths12To17", -28))
+          : card.recentGapMonths >= 6
+            ? Math.abs(clientPenaltyValue("recentGapMonths6To11", -22))
+            : Math.abs(clientPenaltyValue("recentGapMonths3To5", -16));
       score -= penalty;
       addFactor(factors, "近期空窗", -penalty, `最近一份工作結束後約 ${card.recentGapMonths} 個月未見在職/合理原因`);
     }
 
     if (card.repeatedShortGaps) {
-      score -= 8;
-      addFactor(factors, "工作間空窗", -8, "多段工作間隔超過 3 個月");
+      const penalty = Math.abs(clientPenaltyValue("repeatedWorkGap", -14));
+      score -= penalty;
+      addFactor(factors, "工作間空窗", -penalty, "多段工作間隔超過 3 個月");
     }
 
     if (card.lastTwoJobsBothUnderOneYear || card.lastThreeJobsAllUnderTwoYears) {
       const stabilityReasons = [];
       if (card.lastTwoJobsBothUnderOneYear) stabilityReasons.push("最近兩份皆不滿一年");
       if (card.lastThreeJobsAllUnderTwoYears) stabilityReasons.push("最近三份皆兩年以下");
-      score -= 10;
-      addFactor(factors, "工作穩定性", -10, stabilityReasons.join("；"));
+      const penalty = card.lastTwoJobsBothUnderOneYear && card.lastThreeJobsAllUnderTwoYears
+        ? Math.abs(clientPenaltyValue("veryUnstableRecentJobs", -22))
+        : Math.abs(clientPenaltyValue("unstableRecentJobs", -16));
+      score -= penalty;
+      addFactor(factors, "工作穩定性", -penalty, stabilityReasons.join("；"));
     }
 
-    if (includesAny(text, OVERQUALIFIED_KEYWORDS)) {
-      score -= 8;
-      addFactor(factors, "過於優秀風險", -8, "學歷或公司背景過於優秀");
+    const qualityFlags = {
+      noMeaningfulPositiveSignals: false
+    };
+    if (!hasMeaningfulPositiveSignals(factors)) {
+      qualityFlags.noMeaningfulPositiveSignals = true;
+      const penalty = Math.abs(clientConfigNumber("scoreNormalization", "noMeaningfulPositivePenalty", -28));
+      score -= penalty;
+      addFactor(factors, "缺少明確加分項", -penalty, "卡片未命中核心技術、專案深度、資料庫、工程流程或共用清單加分");
+    }
+
+    const prestigeEducationMatches = uniqueMatches(text, clientKeywordList("prestigeEducationKeywords", PRESTIGE_EDUCATION_KEYWORDS));
+    if (prestigeEducationMatches.length) {
+      const penalty = Math.abs(clientPenaltyValue("prestigeEducation", -12));
+      score -= penalty;
+      addFactor(factors, "過高學歷標注", -penalty, `命中 ${prestigeEducationMatches.slice(0, 5).join("、")}，需評估薪資/發展期待落差`);
+    }
+
+    const largeCompanyMatches = uniqueMatches(text, clientKeywordList("largeCompanyKeywords", LARGE_COMPANY_KEYWORDS));
+    if (largeCompanyMatches.length) {
+      const penalty = Math.abs(clientPenaltyValue("largeCompany", -10));
+      score -= penalty;
+      addFactor(factors, "大型公司標注", -penalty, `命中 ${largeCompanyMatches.slice(0, 5).join("、")}，可能有薪資、年終或資源落差`);
+    } else if (includesAny(text, OVERQUALIFIED_KEYWORDS)) {
+      score -= 6;
+      addFactor(factors, "過於優秀風險", -6, "學歷或公司背景可能高於職缺預期");
     }
     if (includesAny(text, ASSISTANT_STAGNATION_KEYWORDS) && card.sameLevelYears >= 5) {
       score -= 6;
@@ -1457,12 +1660,16 @@
 
     return {
       resumeCode: card.resumeCode,
+      candidateName: card.candidateName || "",
+      currentTitle: card.currentTitle || "",
       profileUrl: card.profileUrl || "",
       score: Math.max(0, Math.min(100, Math.round(score))),
+      rawScore: Math.max(0, Math.min(100, Math.round(score))),
       status: riskFlags.length ? "review_required" : "ranked",
       ruleMatches: card.ruleMatches || [],
       riskFlags,
       cardElementAvailable: false,
+      qualityFlags,
       displayReasons: buildDisplayReasons(card, factors, riskFlags),
       reasons: factors
         .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
@@ -1480,7 +1687,7 @@
       positiveKeywords: [],
       negativeIfCurrentMissingAny: []
     };
-    const scored = cards.map((card) => scoreCard(role, card));
+    const scored = applyScanScoreDistribution(cards.map((card) => scoreCard(role, card)));
     const excludedItems = scored.filter((item) => item.status === "excluded");
     const excludedCount = excludedItems.length;
     const excludedReasonCounts = excludedItems.reduce((counts, item) => {
@@ -1490,10 +1697,10 @@
     }, {});
     const ranked = scored
       .filter((item) => item.status === "ranked")
-      .sort((a, b) => b.score - a.score || a.resumeCode.localeCompare(b.resumeCode));
+      .sort((a, b) => b.score - a.score || candidateTieBreaker(a, b));
     const reviewRequired = scored
       .filter((item) => item.status === "review_required")
-      .sort((a, b) => b.score - a.score || a.resumeCode.localeCompare(b.resumeCode));
+      .sort((a, b) => b.score - a.score || candidateTieBreaker(a, b));
     return {
       ranked,
       reviewRequired,
@@ -1524,8 +1731,21 @@
     return [...document.querySelectorAll(CODE_SELECTOR)].map((node) => extractResumeCode(node.textContent)).filter(Boolean).join("|");
   }
 
-  function isNearBottom() {
-    return window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 120;
+  function documentHeight() {
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    return Math.max(
+      scrollingElement.scrollHeight || 0,
+      document.documentElement.scrollHeight || 0,
+      document.body?.scrollHeight || 0
+    );
+  }
+
+  function scrollToDocumentBottom() {
+    window.scrollTo(0, documentHeight());
+  }
+
+  function isNearBottom(tolerance = 120) {
+    return window.scrollY + window.innerHeight >= documentHeight() - tolerance;
   }
 
   function collectVisibleCards(cardsByCode) {
@@ -1634,16 +1854,18 @@
 
   async function fastScrollToBottom(cardsByCode, totalCount) {
     const startedAt = Date.now();
+    const stallTimeoutMs = clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS);
+    const fastScrollDelayMs = clientTimingValue("fastScrollDelayMs", FAST_SCROLL_DELAY_MS);
     let lastScrollY = -1;
     let stuckRounds = 0;
     while (!isNearBottom() && stuckRounds < 4 && !targetReached(cardsByCode, totalCount)) {
-      if (Date.now() - startedAt >= SCAN_STALL_TIMEOUT_MS) {
-        setStatus(`滾動等待超過 ${Math.round(SCAN_STALL_TIMEOUT_MS / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
+      if (Date.now() - startedAt >= stallTimeoutMs) {
+        setStatus(`滾動等待超過 ${Math.round(stallTimeoutMs / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
         break;
       }
       collectAndUpdateProgress(cardsByCode, totalCount);
-      window.scrollTo(0, Math.min(document.documentElement.scrollHeight, window.scrollY + Math.max(window.innerHeight * 2.8, 2200)));
-      await sleep(FAST_SCROLL_DELAY_MS);
+      window.scrollTo(0, Math.min(documentHeight(), window.scrollY + Math.max(window.innerHeight * 2.8, 2200)));
+      await sleep(fastScrollDelayMs);
       if (Math.abs(window.scrollY - lastScrollY) < 8) stuckRounds += 1;
       else stuckRounds = 0;
       lastScrollY = window.scrollY;
@@ -1653,28 +1875,61 @@
 
   async function scrollUntilStable(cardsByCode, totalCount) {
     const startedAt = Date.now();
+    const stallTimeoutMs = clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS);
+    const bottomLoadWaitMs = clientTimingValue("bottomLoadWaitMs", BOTTOM_LOAD_WAIT_MS);
+    const fastScrollDelayMs = clientTimingValue("fastScrollDelayMs", FAST_SCROLL_DELAY_MS);
+    const bottomStableRounds = clientTimingValue("bottomStableRounds", BOTTOM_STABLE_ROUNDS);
+    const scrollHeightStableRounds = clientTimingValue("scrollHeightStableRounds", SCROLL_HEIGHT_STABLE_ROUNDS);
     let timedOut = false;
     let previousProcessed = -1;
+    let previousHeight = -1;
     let stableRounds = 0;
-    while (stableRounds < 3 && !targetReached(cardsByCode, totalCount)) {
-      if (Date.now() - startedAt >= SCAN_STALL_TIMEOUT_MS) {
-        setStatus(`等待下一批超過 ${Math.round(SCAN_STALL_TIMEOUT_MS / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
+    let heightStableRounds = 0;
+    while ((stableRounds < bottomStableRounds || heightStableRounds < scrollHeightStableRounds || !isNearBottom(24)) && !targetReached(cardsByCode, totalCount)) {
+      if (Date.now() - startedAt >= stallTimeoutMs) {
+        setStatus(`等待下一批超過 ${Math.round(stallTimeoutMs / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
         timedOut = true;
         break;
       }
       await fastScrollToBottom(cardsByCode, totalCount);
       const beforeWaitProcessed = processedCount(cardsByCode);
       setStatus(`快速到頁尾，等待下一批...${progressText(cardsByCode, totalCount)}`);
-      await sleep(BOTTOM_LOAD_WAIT_MS);
-      window.scrollTo(0, document.documentElement.scrollHeight);
-      await sleep(FAST_SCROLL_DELAY_MS);
+      await sleep(bottomLoadWaitMs);
+      scrollToDocumentBottom();
+      await sleep(fastScrollDelayMs);
       collectAndUpdateProgress(cardsByCode, totalCount);
       const currentProcessed = processedCount(cardsByCode);
+      const currentHeight = documentHeight();
       if (currentProcessed === beforeWaitProcessed && currentProcessed === previousProcessed) stableRounds += 1;
       else stableRounds = 0;
+      if (currentHeight === previousHeight) heightStableRounds += 1;
+      else heightStableRounds = 0;
       previousProcessed = currentProcessed;
+      previousHeight = currentHeight;
     }
     return { timedOut };
+  }
+
+  async function settleFinalBottom(cardsByCode, totalCount) {
+    const startedAt = Date.now();
+    const stallTimeoutMs = clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS);
+    const bottomLoadWaitMs = clientTimingValue("bottomLoadWaitMs", BOTTOM_LOAD_WAIT_MS);
+    const finalBottomSettleRounds = clientTimingValue("finalBottomSettleRounds", FINAL_BOTTOM_SETTLE_ROUNDS);
+    let previousProcessed = -1;
+    let previousHeight = -1;
+    let stableRounds = 0;
+    while (stableRounds < finalBottomSettleRounds && !targetReached(cardsByCode, totalCount)) {
+      if (Date.now() - startedAt >= stallTimeoutMs) break;
+      scrollToDocumentBottom();
+      await sleep(bottomLoadWaitMs);
+      collectAndUpdateProgress(cardsByCode, totalCount);
+      const currentProcessed = processedCount(cardsByCode);
+      const currentHeight = documentHeight();
+      if (currentProcessed === previousProcessed && currentHeight === previousHeight && isNearBottom(24)) stableRounds += 1;
+      else stableRounds = 0;
+      previousProcessed = currentProcessed;
+      previousHeight = currentHeight;
+    }
   }
 
   function currentPageNumber() {
@@ -1701,12 +1956,13 @@
     await sleep(500);
     nextButton.click();
     await sleep(1200);
-    const deadline = Date.now() + PAGE_CHANGE_TIMEOUT_MS;
+    const pageChangeTimeoutMs = clientTimingValue("pageChangeTimeoutMs", PAGE_CHANGE_TIMEOUT_MS);
+    const deadline = Date.now() + pageChangeTimeoutMs;
     while (Date.now() < deadline) {
       if (currentCodeSignature() && currentCodeSignature() !== beforeCodes) return true;
       await sleep(500);
     }
-    setStatus(`等待第 ${currentPageNumber() + 1} 頁超過 ${Math.round(PAGE_CHANGE_TIMEOUT_MS / 1000)} 秒，先用目前已收集履歷結算。`);
+    setStatus(`等待第 ${currentPageNumber() + 1} 頁超過 ${Math.round(pageChangeTimeoutMs / 1000)} 秒，先用目前已收集履歷結算。`);
     return false;
   }
 
@@ -1714,7 +1970,7 @@
     for (let index = 0; index < 4; index += 1) {
       setStatus(`等待下一批資料...${progressText(cardsByCode, totalCount)}`);
       await sleep(700);
-      window.scrollTo(0, document.documentElement.scrollHeight);
+      scrollToDocumentBottom();
       collectAndUpdateProgress(cardsByCode, totalCount);
       if (currentCodeSignature() && currentCodeSignature() !== beforeSignature) return true;
       if (targetReached(cardsByCode, totalCount)) return true;
@@ -1780,16 +2036,19 @@
     const statusBorder = item.status === "review_required" ? "#d7a45b" : item.status === "excluded" ? UI.border : UI.borderStrong;
     const statusTextColor = item.status === "review_required" ? UI.warning : item.status === "excluded" ? UI.muted : UI.navy;
     const cardMark = item.cardElementAvailable ? "目前頁" : "跨頁/未載入";
+    const displayName = normalizeText(item.candidateName) || `候選人 ${absoluteIndex}`;
+    const currentTitle = normalizeText(item.currentTitle);
     return `
       <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid ${UI.border};border-radius:8px;background:${UI.surface};padding:10px;cursor:${item.profileUrl ? "pointer" : "default"};box-shadow:0 1px 2px rgba(15,39,66,.04);" title="${item.profileUrl ? "點擊卡片可切換勾選" : ""}">
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:start;">
           <input type="checkbox" data-result-select="${escapeHtml(item.resumeCode)}" ${checked} ${disabled} title="勾選後可批次開啟">
           <div style="min-width:0;">
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-              <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer" style="font-weight:800;color:${UI.navy};text-decoration:none;">${absoluteIndex}. ${escapeHtml(item.resumeCode)}</a>
+              <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer" style="font-weight:800;color:${UI.navy};text-decoration:none;">${absoluteIndex}. ${escapeHtml(displayName)}</a>
               <span style="border:1px solid ${statusBorder};border-radius:8px;background:${statusColor};color:${statusTextColor};padding:1px 6px;font-size:11px;font-weight:700;">${statusLabel}</span>
               <span style="border:1px solid ${UI.border};border-radius:8px;background:#fff;padding:1px 6px;font-size:11px;color:${UI.muted};">${cardMark}</span>
             </div>
+            ${currentTitle ? `<div style="margin-top:3px;color:${UI.ink};font-size:12px;font-weight:600;">${escapeHtml(currentTitle)}</div>` : ""}
             <ul style="margin:6px 0 0;padding-left:18px;color:${UI.muted};font-size:12px;">${displayReasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
           </div>
           <strong style="background:${UI.navy};color:#fff;border-radius:8px;padding:2px 8px;">${item.score}</strong>
@@ -1960,7 +2219,9 @@
     resultNode.innerHTML = "";
     updateOpenButtonLabel();
     setCollapsed(false);
-    setProgress(0);
+    setSummary("準備掃描");
+    setStatus("準備讀取共用規則與目前頁卡片...");
+    setProgress(2, "準備中");
 
     const cardsByCode = new Map();
     let batch = 1;
@@ -1969,6 +2230,8 @@
     try {
       await loadSharedRules();
       if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
+      else setStatus("共用規則已就緒，開始掃描卡片...");
+      setProgress(5, "開始");
       await waitForCards();
       await prepareScanPosition(cardsByCode);
       const totalCount = getTotalCount();
@@ -1996,6 +2259,8 @@
           batch += 1;
         }
       }
+      setStatus(`最後確認頁尾是否還有延遲載入卡片...${progressText(cardsByCode, totalCount)}`);
+      await settleFinalBottom(cardsByCode, totalCount);
 
       const cards = [...cardsByCode.values()];
       const ranking = rankCandidates(cards);
