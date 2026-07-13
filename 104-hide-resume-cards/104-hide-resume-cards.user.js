@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      3.0.5
+// @version      3.0.6
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -126,6 +126,7 @@
   const DATABASE_KEYWORDS = ["mssql", "ms sql", "sql server", "mysql", "oracle", "postgres", "資料庫", "db"];
   const ENGINEERING_PROCESS_KEYWORDS = ["git", "版控", "單元測試", "unit test", "ci/cd", "jira", "敏捷", "agile", "scrum"];
   const PROJECT_DEPTH_KEYWORDS = ["0到1", "架構", "導入", "重構", "效能", "api", "後端", "前端", "平台", "系統"];
+  const UNSUITABLE_ENGINEER_TYPE_KEYWORDS = ["mis", "fae", "field application engineer", "erp", "sap", "salesforce", "系統維護", "網管", "it support", "helpdesk"];
   const NON_WEB_DESIRED_TITLE_PATTERN = /資料科學|data\s*scientist|data\s*science|區塊鏈|blockchain|ai\s*工程師|人工智慧|machine\s*learning|機器學習|深度學習|半導體|semiconductor|android|andriod|\bios\b|app\s*工程師|app工程師|mobile|行動/i;
 
   let isScanning = false;
@@ -197,7 +198,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v3.0.5</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v3.0.6</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -1121,6 +1122,31 @@
       .trim();
   }
 
+  function cleanupJobTitle(text) {
+    let title = normalizeText(text);
+    let previous = "";
+    while (title && title !== previous) {
+      previous = title;
+      title = title
+        .replace(/\s*[（(]\s*(?:仍在職|在職中|目前|至今)?\s*[）)]\s*$/g, "")
+        .replace(/\s*[（(]\s*[）)]\s*$/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+    return title;
+  }
+
+  function normalizeCompanyTitleSplit(companyName, jobTitle) {
+    let company = normalizeText(companyName);
+    let title = cleanupJobTitle(jobTitle);
+    const legalPrefix = title.match(/^(股份有限公司|有限公司|股份有限|公司)\s*(.*)$/);
+    if (company && legalPrefix && !/(股份有限公司|有限公司|股份有限|公司)$/.test(company)) {
+      company = normalizeText(`${company}${legalPrefix[1]}`);
+      title = cleanupJobTitle(legalPrefix[2]);
+    }
+    return { companyName: company, jobTitle: title };
+  }
+
   function parseRecentJobSummary(jobLine, fallbackTitle = "") {
     const raw = normalizeText(jobLine);
     const durationMonths = durationMonthsFromJobLine(raw);
@@ -1135,16 +1161,19 @@
     let jobTitle = "";
     if (delimitedParts.length >= 2) {
       companyName = delimitedParts[0];
-      jobTitle = delimitedParts[1];
+      jobTitle = delimitedParts.slice(1).join(" - ");
     } else {
       const companyMatch = cleaned.match(/^(.{2,45}?(?:股份有限公司|有限公司|股份有限|公司|銀行|科技|資訊|電腦|顧問|系統|軟體|集團|外商|工作室))\s*(.*)$/);
       if (companyMatch) {
         companyName = normalizeText(companyMatch[1]);
-        jobTitle = normalizeText(companyMatch[2]);
+        jobTitle = cleanupJobTitle(companyMatch[2]);
       }
     }
 
-    if (!jobTitle && fallbackTitle) jobTitle = normalizeText(fallbackTitle);
+    const normalizedSplit = normalizeCompanyTitleSplit(companyName, jobTitle);
+    companyName = normalizedSplit.companyName;
+    jobTitle = normalizedSplit.jobTitle;
+    if (!jobTitle && fallbackTitle) jobTitle = cleanupJobTitle(fallbackTitle);
     return {
       text: raw,
       companyName: companyName || "最近任職公司未顯示",
@@ -1152,6 +1181,10 @@
       durationMonths,
       durationText
     };
+  }
+
+  function parseRecentJobs(jobLines, fallbackTitle = "") {
+    return jobLines.slice(0, 3).map((line, index) => parseRecentJobSummary(line, index === 0 ? fallbackTitle : ""));
   }
 
   function parseJobPeriod(text) {
@@ -1234,13 +1267,15 @@
 
   function extractCardMeta(card) {
     const jobLines = [...card.querySelectorAll(JOB_HISTORY_SELECTOR)].map((item) => normalizeText(item.textContent));
-    const currentTitle = normalizeText(card.querySelector(PREFER_TITLE_SELECTOR)?.textContent).replace(/^希望職稱\s*[：:]?\s*/, "");
-    const recentJobSummary = parseRecentJobSummary(jobLines[0] || "", currentTitle);
+    const currentTitle = cleanupJobTitle(normalizeText(card.querySelector(PREFER_TITLE_SELECTOR)?.textContent).replace(/^希望職稱\s*[：:]?\s*/, ""));
+    const recentJobs = parseRecentJobs(jobLines, currentTitle);
+    const recentJobSummary = recentJobs[0] || parseRecentJobSummary("", currentTitle);
     return {
       candidateName: normalizeText(card.querySelector(NAME_SELECTOR)?.textContent),
       currentTitle,
       experienceText: jobLines.join(" | "),
       recentJobSummary,
+      recentJobs,
       recentCompanyName: recentJobSummary.companyName,
       recentJobTitle: recentJobSummary.jobTitle,
       recentJobDurationMonths: recentJobSummary.durationMonths,
@@ -1262,6 +1297,7 @@
       profileUrl: new URL(href, location.origin).toString(),
       candidateName: cardMeta.candidateName,
       currentTitle: cardMeta.currentTitle,
+      recentJobs: cardMeta.recentJobs,
       recentCompanyName: cardMeta.recentCompanyName,
       recentJobTitle: cardMeta.recentJobTitle,
       recentJobDurationMonths: cardMeta.recentJobDurationMonths,
@@ -1532,7 +1568,8 @@
       "過高學歷標注": "過高學歷",
       "大型公司標注": "大型公司",
       "過於優秀風險": "過於優秀",
-      "特殊職涯狀況": "職涯疑慮"
+      "特殊職涯狀況": "職涯疑慮",
+      "非核心開發職能": "非核心開發"
     };
     return map[label] || label.replace(/[^\p{L}\p{N}]+/gu, "");
   }
@@ -1559,6 +1596,35 @@
         if (tag) tags.push(tag);
       });
     return uniqueList(tags).slice(0, 9).map((tag) => `#${tag.replace(/^#/, "")}`);
+  }
+
+  function tagKey(label) {
+    return `#${normalizeText(label).replace(/^#/, "")}`;
+  }
+
+  function addTagDetail(details, tag, line) {
+    const key = tagKey(tag);
+    if (!line) return;
+    const existing = details[key] ? `${details[key]}\n${line}` : line;
+    details[key] = uniqueList(existing.split("\n")).join("\n");
+  }
+
+  function buildDisplayTagDetails(card, factors = [], riskFlags = [], rejectedReasons = []) {
+    const details = {};
+    const siNames = positiveSiCompanyNames(card);
+    const gamblingNames = gamblingRiskNames(card, riskFlags);
+    if (siNames.length) addTagDetail(details, "SI同業", `同業SI公司：${siNames.slice(0, 4).join("、")}`);
+    if (riskFlags.length || gamblingNames.length) addTagDetail(details, "人工覆核", `人工覆核：${gamblingNames.concat(riskFlags).slice(0, 6).join("、")}`);
+    rejectedReasons.forEach((reason) => addTagDetail(details, reasonTagLabel(reason), `排除原因：${reason}`));
+    factors
+      .slice()
+      .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
+      .forEach((factor) => {
+        const tag = factorTagLabel(factor);
+        const points = `${factor.points > 0 ? "+" : ""}${Math.round(factor.points)}`;
+        addTagDetail(details, tag, `${factor.label} ${points}：${factor.details || "命中此條件"}`);
+      });
+    return details;
   }
 
   function riskFlagsForCard(card, text) {
@@ -1618,6 +1684,33 @@
     const values = clientRejectRuleConfig()?.[key];
     if (!Array.isArray(values) || !values.length) return fallback;
     return uniqueList(values.concat(fallback));
+  }
+
+  function unsuitableEngineerTypeConfig() {
+    return clientScoringConfig()?.unsuitableEngineerTypes || {};
+  }
+
+  function unsuitableEngineerTypePenalty() {
+    const value = Number(unsuitableEngineerTypeConfig().penalty);
+    if (Number.isFinite(value)) return value;
+    return clientPenaltyValue("unsuitableEngineerType", -20);
+  }
+
+  function unsuitableEngineerTypeKeywords() {
+    const values = unsuitableEngineerTypeConfig().keywords;
+    if (!Array.isArray(values) || !values.length) return UNSUITABLE_ENGINEER_TYPE_KEYWORDS;
+    return uniqueList(values.concat(UNSUITABLE_ENGINEER_TYPE_KEYWORDS));
+  }
+
+  function unsuitableEngineerTypeMatches(card) {
+    if (unsuitableEngineerTypeConfig().enabled === false) return [];
+    const recentJobs = (card.recentJobs || []).slice(0, 3).map((job) => [
+      job.companyName,
+      job.jobTitle,
+      job.text
+    ].join(" "));
+    const focusedText = [card.currentTitle, ...recentJobs].join(" ");
+    return uniqueList(countTermMatches(focusedText, unsuitableEngineerTypeKeywords()));
   }
 
   function lowQualityMaxNormalizedScore() {
@@ -1729,6 +1822,7 @@
         resumeCode: card.resumeCode,
         candidateName: card.candidateName || "",
         currentTitle: card.currentTitle || "",
+        recentJobs: card.recentJobs || [],
         recentCompanyName: card.recentCompanyName || "",
         recentJobTitle: card.recentJobTitle || "",
         recentJobDurationText: card.recentJobDurationText || "",
@@ -1739,6 +1833,7 @@
         reasons: rejectedReasons,
         displayReasons: buildDisplayReasons(card, [], riskFlags, rejectedReasons),
         displayTags: buildDisplayTags(card, [], riskFlags, rejectedReasons),
+        displayTagDetails: buildDisplayTagDetails(card, [], riskFlags, rejectedReasons),
         ruleMatches: card.ruleMatches || [],
         riskFlags,
         cardElementAvailable: false
@@ -1768,6 +1863,18 @@
     score += addFactor(factors, "工程流程成熟度", Math.min(6, countMatches(text, ENGINEERING_PROCESS_KEYWORDS).length * 2), countMatches(text, ENGINEERING_PROCESS_KEYWORDS).join("、"));
     score += addFactor(factors, "專案深度", Math.min(7, countMatches(text, PROJECT_DEPTH_KEYWORDS).length * 1.5), countMatches(text, PROJECT_DEPTH_KEYWORDS).slice(0, 6).join("、"));
     score += addFactor(factors, "產業/專案背景", Math.min(7, countMatches(text, SOFTWARE_PROJECT_KEYWORDS).length * 2.5), countMatches(text, SOFTWARE_PROJECT_KEYWORDS).join("、"));
+
+    const unsuitableMatches = unsuitableEngineerTypeMatches(card);
+    if (unsuitableMatches.length) {
+      const penalty = Math.abs(unsuitableEngineerTypePenalty());
+      score -= penalty;
+      addFactor(
+        factors,
+        "非核心開發職能",
+        -penalty,
+        `期待職稱或前三份工作命中 ${unsuitableMatches.slice(0, 5).join("、")}，偏 MIS/FAE/ERP/Salesforce/支援導入職能，非主要程式開發`
+      );
+    }
 
     const positiveRuleMatches = positiveRuleMatchesForCard(card);
     const positiveRulePoints = Math.min(8, positiveRuleMatches.reduce((sum, match) => sum + Number(match.scoreDelta || 0), 0));
@@ -1850,6 +1957,7 @@
       resumeCode: card.resumeCode,
       candidateName: card.candidateName || "",
       currentTitle: card.currentTitle || "",
+      recentJobs: card.recentJobs || [],
       recentCompanyName: card.recentCompanyName || "",
       recentJobTitle: card.recentJobTitle || "",
       recentJobDurationText: card.recentJobDurationText || "",
@@ -1863,6 +1971,7 @@
       qualityFlags,
       displayReasons: buildDisplayReasons(card, factors, riskFlags),
       displayTags: buildDisplayTags(card, factors, riskFlags),
+      displayTagDetails: buildDisplayTagDetails(card, factors, riskFlags),
       reasons: factors
         .sort((a, b) => Math.abs(b.points) - Math.abs(a.points))
         .map((factor) => `${factor.label} ${factor.points > 0 ? "+" : ""}${Math.round(factor.points)}：${factor.details}`)
@@ -2219,20 +2328,40 @@
     return `<button data-select-action="${action}" style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">${label}</button>`;
   }
 
+  function formatJobLine(job, fallbackItem = {}) {
+    const companyName = normalizeText(job?.companyName) || normalizeText(fallbackItem.recentCompanyName) || "最近任職公司未顯示";
+    const jobTitle = cleanupJobTitle(job?.jobTitle || fallbackItem.recentJobTitle || fallbackItem.currentTitle) || "職稱未顯示";
+    const durationText = normalizeText(job?.durationText) || normalizeText(fallbackItem.recentJobDurationText);
+    return `${companyName} - ${jobTitle}${durationText ? `（${durationText}）` : ""}`;
+  }
+
+  function renderRecentJobs(item) {
+    const jobs = (item.recentJobs || []).filter((job) => normalizeText(job?.companyName) || normalizeText(job?.jobTitle)).slice(0, 3);
+    const displayJobs = jobs.length ? jobs : [{
+      companyName: item.recentCompanyName,
+      jobTitle: item.recentJobTitle || item.currentTitle,
+      durationText: item.recentJobDurationText
+    }];
+    return displayJobs.map((job, index) => {
+      const style = index === 0
+        ? `margin-top:3px;color:${UI.ink};font-size:12px;font-weight:650;line-height:1.45;word-break:break-word;`
+        : `margin-top:2px;color:${UI.muted};font-size:11px;font-weight:500;line-height:1.4;word-break:break-word;`;
+      return `<div style="${style}">${escapeHtml(formatJobLine(job, item))}</div>`;
+    }).join("");
+  }
+
+  function tagTooltip(tag, item) {
+    const detail = item.displayTagDetails?.[tag] || item.displayTagDetails?.[tagKey(tag)] || "";
+    if (detail) return detail;
+    const matchedReason = (item.reasons || []).find((reason) => reason.includes(tag.replace(/^#/, "")));
+    return matchedReason || `${tag}：此標籤來自本次掃描評分條件`;
+  }
+
   function renderResultItem(item, absoluteIndex) {
     const checked = selectedResumeCodes.has(item.resumeCode) ? "checked" : "";
     const disabled = item.profileUrl ? "" : "disabled";
     const displayTags = (item.displayTags && item.displayTags.length ? item.displayTags : (item.reasons || []).map((reason) => `#${reasonTagLabel(reason)}`)).slice(0, 9);
-    const statusLabel = item.status === "review_required" ? "人工覆核" : item.status === "excluded" ? "排除" : "推薦";
-    const statusColor = item.status === "review_required" ? UI.warningBg : item.status === "excluded" ? "#eef2f6" : UI.navySoft;
-    const statusBorder = item.status === "review_required" ? "#d7a45b" : item.status === "excluded" ? UI.border : UI.borderStrong;
-    const statusTextColor = item.status === "review_required" ? UI.warning : item.status === "excluded" ? UI.muted : UI.navy;
-    const cardMark = item.cardElementAvailable ? "目前頁" : "跨頁/未載入";
     const displayName = normalizeText(item.candidateName) || `候選人 ${absoluteIndex}`;
-    const recentCompanyName = normalizeText(item.recentCompanyName) || "最近任職公司未顯示";
-    const recentJobTitle = normalizeText(item.recentJobTitle) || normalizeText(item.currentTitle) || "職稱未顯示";
-    const durationText = normalizeText(item.recentJobDurationText);
-    const recentJobLine = `${recentCompanyName} - ${recentJobTitle}${durationText ? `（${durationText}）` : ""}`;
     return `
       <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid ${UI.border};border-radius:8px;background:${UI.surface};padding:10px 10px 9px;cursor:${item.profileUrl ? "pointer" : "default"};box-shadow:0 1px 2px rgba(15,39,66,.04);" title="${item.profileUrl ? "點擊卡片可切換勾選" : ""}">
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:start;">
@@ -2241,11 +2370,9 @@
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;">
               <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:900;color:${UI.navy};font-size:14px;text-decoration:none;">${absoluteIndex}. ${escapeHtml(displayName)}</a>
             </div>
-            <div style="margin-top:3px;color:${UI.ink};font-size:12px;font-weight:650;line-height:1.45;word-break:break-word;">${escapeHtml(recentJobLine)}</div>
+            ${renderRecentJobs(item)}
             <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:7px;">
-              <span style="border:1px solid ${statusBorder};border-radius:8px;background:${statusColor};color:${statusTextColor};padding:1px 6px;font-size:11px;font-weight:700;">${statusLabel}</span>
-              <span style="border:1px solid ${UI.border};border-radius:8px;background:#fff;padding:1px 6px;font-size:11px;color:${UI.muted};">${cardMark}</span>
-              ${displayTags.map((tag) => `<span style="border:1px solid ${UI.border};border-radius:999px;background:${UI.page};color:${UI.muted};padding:1px 7px;font-size:11px;font-weight:650;">${escapeHtml(tag)}</span>`).join("")}
+              ${displayTags.map((tag) => `<span title="${escapeHtml(tagTooltip(tag, item))}" style="border:1px solid ${UI.border};border-radius:999px;background:${UI.page};color:${UI.muted};padding:1px 7px;font-size:11px;font-weight:650;">${escapeHtml(tag)}</span>`).join("")}
             </div>
           </div>
           <strong style="background:${UI.navy};color:#fff;border-radius:8px;padding:2px 8px;">${item.score}</strong>
