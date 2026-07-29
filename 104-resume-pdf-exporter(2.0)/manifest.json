@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "104 VIP Resume PDF Exporter (Control)",
+  "version": "1.5.0",
+  "description": "Export 104 VIP resumes to PDF with manual/group prefix modes, custom suffix, batch stop control, and upgraded UI.",
+  "action": {
+    "default_title": "104 PDF Exporter",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "downloads",
+    "debugger",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://vip.104.com.tw/ResumeTools/resumePreview?*",
+    "https://vip.104.com.tw/search/*",
+    "https://vip.104.com.tw/document/*",
+    "https://vip.104.com.tw/apply/*"
+  ]
+}
