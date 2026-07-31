@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>104 招募工作台</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">104 RECRUITING TOOLKIT</p>
+        <h1>招募工作台</h1>
+        <p class="header-copy">先確認匯出格式，再選擇要執行的工作。</p>
+      </div>
+      <span id="globalStatus" class="status-badge status-idle">待命</span>
+    </header>
+
+    <section class="settings-card" aria-labelledby="settingsTitle">
+      <div class="section-heading">
+        <div>
+          <p class="step-label">步驟 1</p>
+          <h2 id="settingsTitle">PDF 匯出設定</h2>
+        </div>
+        <span id="settingsStatus" class="scope-badge">自動套用</span>
+      </div>
+      <p class="section-copy">工作流與單獨匯出都會使用這組設定。</p>
+
+      <div class="settings-body">
+        <label class="field">
+          <span>檔名前綴模式</span>
+          <select id="prefixMode">
+            <option value="manual">手動輸入前綴</option>
+            <option value="tabGroup">使用目前分頁群組名稱</option>
+            <option value="none">不使用前綴</option>
+          </select>
+        </label>
+        <div class="field-grid">
+          <label class="field">
+            <span>手動前綴</span>
+            <input id="filenamePrefix" placeholder="例如：Java工程師">
+          </label>
+          <label class="field">
+            <span>檔名後綴</span>
+            <input id="filenameSuffix" placeholder="例如：104">
+          </label>
+        </div>
+        <label class="field">
+          <span>下載子資料夾</span>
+          <input id="subdir" placeholder="例如：104履歷下載區/">
+        </label>
+        <div class="field-grid">
+          <label class="field">
+            <span>首份等待（ms）</span>
+            <input id="firstWait" type="number" min="0">
+          </label>
+          <label class="field">
+            <span>後續等待（ms）</span>
+            <input id="nextWait" type="number" min="0">
+          </label>
+        </div>
+        <div class="preview">
+          <span>檔名預覽</span>
+          <strong id="filenamePreview">王小明.pdf</strong>
+          <small id="groupHint">正在讀取目前分頁群組…</small>
+        </div>
+        <button id="saveSettings" class="button button-secondary button-block">儲存設定</button>
+      </div>
+    </section>
+
+    <section class="workflow-card" aria-labelledby="workflowTitle">
+      <div class="section-heading">
+        <div>
+          <p class="step-label">步驟 2・主要工作流</p>
+          <h2 id="workflowTitle">複製資料並匯出 PDF</h2>
+        </div>
+        <span class="scope-badge">本頁往右</span>
+      </div>
+      <p class="section-copy">先整理聯絡資料並複製，再依照上方設定匯出所有履歷。</p>
+      <button id="startWorkflow" class="button button-primary button-block">
+        <span>開始複製並匯出</span>
+        <span aria-hidden="true">→</span>
+      </button>
+      <button id="stopWorkflow" class="button button-danger button-block is-hidden">停止目前工作流</button>
+      <div class="progress-region" aria-live="polite">
+        <div class="progress-meta">
+          <span id="workflowPhase">尚未開始</span>
+          <span id="workflowProgress">0 / 2</span>
+        </div>
+        <div class="progress-track"><div id="workflowBar" class="progress-bar"></div></div>
+        <p id="workflowMessage" class="status-message">從目前分頁開始，向右處理連續的 104 履歷分頁。</p>
+      </div>
+    </section>
+
+    <section class="standalone-card" aria-labelledby="standaloneTitle">
+      <div class="section-heading compact">
+        <div>
+          <p class="step-label">其他操作</p>
+          <h2 id="standaloneTitle">只執行單一功能</h2>
+        </div>
+      </div>
+      <div class="tool-launchers">
+        <button id="toggleCopyPanel" class="tool-toggle" type="button" aria-expanded="false" aria-controls="copyPanel">
+          <span>純複製資料</span><span class="toggle-icon" aria-hidden="true">＋</span>
+        </button>
+        <button id="toggleExportPanel" class="tool-toggle" type="button" aria-expanded="false" aria-controls="exportPanel">
+          <span>純匯出 PDF</span><span class="toggle-icon" aria-hidden="true">＋</span>
+        </button>
+      </div>
+
+      <section id="copyPanel" class="standalone-panel" aria-labelledby="copyPanelTitle" hidden>
+        <div class="section-heading compact">
+          <h3 id="copyPanelTitle">複製聯絡資料</h3>
+          <span id="copyCount" class="count-badge">0 筆</span>
+        </div>
+        <div class="button-grid">
+          <button id="copyCurrent" class="button button-primary">複製本頁</button>
+          <button id="copyRight" class="button button-secondary">本頁往右收集</button>
+        </div>
+        <button id="stopCopy" class="button button-danger button-block" disabled>停止資料收集</button>
+        <div id="copyStatus" class="detail-status" aria-live="polite">待命中</div>
+        <p class="helper-text">完成後可直接將 TSV 貼到 Google Sheet。</p>
+      </section>
+
+      <section id="exportPanel" class="standalone-panel" aria-labelledby="exportPanelTitle" hidden>
+        <div class="section-heading compact">
+          <h3 id="exportPanelTitle">匯出履歷 PDF</h3>
+          <span id="pdfProgress" class="count-badge">0 / 0</span>
+        </div>
+        <div class="button-grid">
+          <button id="downloadCurrent" class="button button-primary">匯出本頁</button>
+          <button id="downloadRight" class="button button-secondary">本頁往右匯出</button>
+        </div>
+        <button id="stopPdf" class="button button-danger button-block" disabled>停止 PDF 匯出</button>
+        <div id="pdfStatus" class="detail-status" aria-live="polite">將使用上方的 PDF 匯出設定。</div>
+      </section>
+    </section>
+
+    <footer>只會在 vip.104.com.tw 執行；個資不會傳送到外部服務。</footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

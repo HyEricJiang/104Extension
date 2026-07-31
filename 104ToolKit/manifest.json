@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "104 招募工作台",
+  "version": "1.0.3",
+  "description": "在同一個工作台複製 104 聯絡資料、匯出履歷 PDF，或依序完成兩項工作。",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "scripting",
+    "downloads",
+    "debugger",
+    "storage",
+    "activeTab",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://vip.104.com.tw/*"
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "104 招募工作台",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
