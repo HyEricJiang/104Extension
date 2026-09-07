@@ -1402,6 +1402,8 @@
     updateOpenButtonLabel();
     const selectedCountNode = resultNode?.querySelector("[data-selected-count]");
     if (selectedCountNode) selectedCountNode.textContent = `已勾選 ${selectedResumeCodes.size} 筆`;
+    const toggleSelectionButton = resultNode?.querySelector('[data-select-action="toggle-page"]');
+    if (toggleSelectionButton) toggleSelectionButton.textContent = isVisiblePageFullySelected() ? "取消本頁全選" : "本頁全選";
   }
 
   function scrollResultViewToTop() {
