@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.1.0
+// @version      4.1.1
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -160,13 +160,13 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.0</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.1</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
         <div style="margin-bottom:8px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;color:${UI.muted};font-size:11px;">
-            <span>掃描進度</span>
+            <span>共 4 個處理階段</span>
             <span data-screening-progress-label>0%</span>
           </div>
           <div style="height:8px;border-radius:999px;background:${UI.navySoft};overflow:hidden;border:1px solid ${UI.border};">
@@ -244,6 +244,15 @@
     const nextPercent = clamp(Number(percent) || 0, 0, 100);
     if (progressFillNode) progressFillNode.style.width = `${nextPercent}%`;
     if (progressLabelNode) progressLabelNode.textContent = label || `${Math.round(nextPercent)}%`;
+  }
+
+  function setStageProgress(stageIndex, stageName, completed, total, startPercent, endPercent) {
+    const safeCompleted = Math.max(0, Number(completed) || 0);
+    const safeTotal = Math.max(0, Number(total) || 0);
+    const ratio = safeTotal ? clamp(safeCompleted / safeTotal, 0, 1) : 0;
+    const overallPercent = clamp(startPercent + ((endPercent - startPercent) * ratio), 0, 100);
+    const countLabel = safeTotal ? `${Math.min(safeCompleted, safeTotal)}/${safeTotal}` : `${safeCompleted}/?`;
+    setProgress(overallPercent, `第 ${stageIndex}/4 階段 · ${stageName} ${countLabel}（總完成 ${Math.round(overallPercent)}%）`);
   }
 
   function setCollapsed(nextCollapsed) {
@@ -645,18 +654,22 @@
 
   async function enrichResumeDetails(roleId, role, cards) {
     const targets = cards.filter((card) => needsDetailEnrichment(roleId, role, card));
-    if (!targets.length) return { requested: 0, loaded: 0, failed: 0 };
+    if (!targets.length) {
+      setStageProgress(2, "詳情補強", 0, 0, 65, 85);
+      return { requested: 0, loaded: 0, failed: 0 };
+    }
 
     let cursor = 0;
+    let completed = 0;
     let loaded = 0;
     let failed = 0;
+    setStageProgress(2, "詳情補強", 0, targets.length, 65, 85);
     async function worker() {
       while (cursor < targets.length && isScanning && !scanCancellationRequested) {
         const index = cursor;
         cursor += 1;
         const card = targets[index];
-        setStatus(`詳情補強 ${index + 1}/${targets.length}：讀取核心技術、期待職稱、語言、證照與薪資...`);
-        setProgress(72 + Math.round(((index + 1) / targets.length) * 20), `補強 ${index + 1}/${targets.length}`);
+        setStatus(`第 2/4 階段：正在讀取履歷詳情（已完成 ${completed}/${targets.length}）...`);
         try {
           card.detail = await requestResumeDetailWithRetry(card);
           loaded += 1;
@@ -667,6 +680,8 @@
             errorType: normalizeText(error?.message || "履歷詳情讀取失敗")
           };
         }
+        completed += 1;
+        setStageProgress(2, "詳情補強", completed, targets.length, 65, 85);
         await sleep(detailRequestDelay(index));
       }
     }
@@ -943,9 +958,10 @@
 
   async function rankCandidates(cards, roleId) {
     const all = [];
+    setStageProgress(3, "後端評分", 0, cards.length, 85, 98);
     for (let offset = 0; offset < cards.length; offset += 25) {
       if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
-      setStatus("後端分析 " + Math.min(offset + 25, cards.length) + "/" + cards.length);
+      setStatus(`第 3/4 階段：後端評分中（已完成 ${offset}/${cards.length}）...`);
       const batch = cards.slice(offset, offset + 25);
       const response = await backendRequest({action:"screen", roleId, cards:batch.map(card => {
         // 姓名與履歷連結保留於畫面；只送評估所需欄位。
@@ -958,6 +974,7 @@
         if (!original) throw new Error("後端履歷對應不符");
         all.push({...result, candidateName:original.candidateName, profileUrl:original.profileUrl});
       });
+      setStageProgress(3, "後端評分", Math.min(offset + batch.length, cards.length), cards.length, 85, 98);
     }
     // 分數只由後端計算；前端一律以總分由高到低呈現。
     const sorted = sortResultsByScore(all);
@@ -974,6 +991,15 @@
       statusOrder(a.item.status) - statusOrder(b.item.status) ||
       a.originalIndex - b.originalIndex
     )).map((entry) => entry.item);
+  }
+
+  function buildSortedResultGroups(groups) {
+    return {
+      ranked: sortResultsByScore(groups.ranked),
+      review: sortResultsByScore(groups.review),
+      excluded: sortResultsByScore(groups.excluded),
+      all: sortResultsByScore(groups.all)
+    };
   }
 
   function nextUnreadHighScoreBatch(items, openedCodes, limit = 15) {
@@ -1109,7 +1135,7 @@
   function collectAndUpdateProgress(cardsByCode, totalCount) {
     const count = collectVisibleCards(cardsByCode);
     setSummary(progressText(cardsByCode, totalCount));
-    setProgress(5 + Math.round(progressPercent(cardsByCode, totalCount) * 0.63), "初篩");
+    setStageProgress(1, "收集履歷", processedCount(cardsByCode), totalCount, 5, 65);
     return count;
   }
 
@@ -1259,12 +1285,12 @@
   }
 
   function resultGroups() {
-    return {
+    return buildSortedResultGroups({
       ranked: latestRanked,
       review: latestReviewRequired,
       excluded: latestExcluded,
       all: latestAllResults
-    };
+    });
   }
 
   function resultFilterLabel(filter) {
@@ -1515,7 +1541,7 @@
     attachResultEvents();
     updateOpenButtonLabel();
     setSummary(`完成：推薦 ${latestRanked.length} · 人工覆核 ${latestReviewRequired.length} · 排除 ${excludedCount} · 跳過 ${skippedCards.size}`);
-    setProgress(100, "完成");
+    setProgress(100, "第 4/4 階段 · 排序呈現完成（總完成 100%）");
     const shortageNote = latestRanked.length
       ? `已依分數排序；可勾選後開啟履歷。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
       : `沒有推薦候選人。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`;
@@ -1615,7 +1641,7 @@
     setCollapsed(false);
     setSummary("準備掃描");
     setStatus("準備讀取共用規則與目前頁卡片...");
-    setProgress(2, "準備中");
+    setProgress(2, "第 1/4 階段 · 準備收集（總完成 2%）");
 
     const cardsByCode = new Map();
     let batch = 1;
@@ -1630,7 +1656,7 @@
       await loadSharedRules();
       if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
       else setStatus("共用規則已就緒，開始掃描卡片...");
-      setProgress(5, "開始");
+      setStageProgress(1, "收集履歷", 0, getTotalCount(), 5, 65);
       await waitForCards();
       await prepareScanPosition(cardsByCode);
       const totalCount = getTotalCount();
@@ -1670,6 +1696,8 @@
         setSummary(`詳情補強：成功 ${enrichment.loaded} · 待確認 ${enrichment.failed}`);
       }
       const ranking = await rankCandidates(cards, roleId);
+      setStatus("第 4/4 階段：正在依分數排序並更新畫面...");
+      setStageProgress(4, "排序呈現", 0, 1, 98, 100);
       const scoredItems = ranking.allResults;
       latestScoreByCode = new Map(scoredItems.map((item) => [item.resumeCode, item]));
       const movedCards = reorderLoadedCardsByScore(scoredItems);
@@ -1707,7 +1735,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, nextUnreadHighScoreBatch});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch});
     return;
   }
 
