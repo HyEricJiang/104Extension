@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.0.0
+// @version      4.1.0
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -92,6 +92,7 @@
   let statusNode;
   let startButton;
   let copyButton;
+  let quickOpenButton;
   let launcherButton;
   let toggleButton;
   let resultNode;
@@ -107,6 +108,8 @@
   let latestExcluded = [];
   let latestAllResults = [];
   let selectedResumeCodes = new Set();
+  let openedResumeCodes = new Set();
+  let isOpeningProfiles = false;
   let currentResultFilter = "ranked";
   let currentResultPage = 1;
   let latestCardsByCode = new Map();
@@ -157,7 +160,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.0.0</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.0</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -183,6 +186,7 @@
           <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
           <button data-screening-copy style="height:36px;border:1px solid ${UI.borderStrong};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;">開啟勾選</button>
         </div>
+        <button data-screening-quick-open disabled style="width:100%;height:36px;margin-bottom:10px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navySoft};color:${UI.navy};font-weight:800;cursor:pointer;">掃描後可開啟前 15 筆</button>
         <div data-screening-body style="display:none;min-height:0;overflow:auto;padding-right:2px;">
           <div data-screening-results style="display:grid;gap:8px;"></div>
         </div>
@@ -198,6 +202,7 @@
     progressLabelNode = panel.querySelector("[data-screening-progress-label]");
     startButton = panel.querySelector("[data-screening-start]");
     copyButton = panel.querySelector("[data-screening-copy]");
+    quickOpenButton = panel.querySelector("[data-screening-quick-open]");
     toggleButton = panel.querySelector("[data-screening-toggle]");
     bodyNode = panel.querySelector("[data-screening-body]");
     resultNode = panel.querySelector("[data-screening-results]");
@@ -212,6 +217,7 @@
       scan();
     });
     copyButton.addEventListener("click", openRankedProfiles);
+    quickOpenButton.addEventListener("click", openNextUnreadHighScoreProfiles);
     toggleButton.addEventListener("click", () => setCollapsed(true));
     setupPrintAutoHide();
     enablePanelDrag();
@@ -953,12 +959,27 @@
         all.push({...result, candidateName:original.candidateName, profileUrl:original.profileUrl});
       });
     }
-    // 排列已由後端給定的層級與分數；客戶端不計算評分。
-    all.sort((a,b) => a.rankTier-b.rankTier || b.score-a.score);
-    const ranked = all.filter(item => item.status === "ranked");
-    const reviewRequired = all.filter(item => item.status === "review_required");
-    const excluded = all.filter(item => item.status === "excluded");
-    return {ranked, reviewRequired, excluded, allResults:all, excludedCount:excluded.length, excludedReasonCounts:{}};
+    // 分數只由後端計算；前端一律以總分由高到低呈現。
+    const sorted = sortResultsByScore(all);
+    const ranked = sorted.filter(item => item.status === "ranked");
+    const reviewRequired = sorted.filter(item => item.status === "review_required");
+    const excluded = sorted.filter(item => item.status === "excluded");
+    return {ranked, reviewRequired, excluded, allResults:sorted, excludedCount:excluded.length, excludedReasonCounts:{}};
+  }
+
+  function sortResultsByScore(items) {
+    return (items || []).map((item, originalIndex) => ({ item, originalIndex })).sort((a, b) => (
+      Number(b.item.score || 0) - Number(a.item.score || 0) ||
+      Number(a.item.rankTier || 99) - Number(b.item.rankTier || 99) ||
+      statusOrder(a.item.status) - statusOrder(b.item.status) ||
+      a.originalIndex - b.originalIndex
+    )).map((entry) => entry.item);
+  }
+
+  function nextUnreadHighScoreBatch(items, openedCodes, limit = 15) {
+    return sortResultsByScore(items)
+      .filter((item) => item.status !== "excluded" && item.profileUrl && !openedCodes.has(item.resumeCode))
+      .slice(0, limit);
   }
 
   function sleep(ms) {
@@ -1064,8 +1085,8 @@
     let moved = 0;
     groups.forEach((entries, parent) => {
       const sorted = entries.slice().sort((a, b) => (
-        (a.item.rankTier || 99) - (b.item.rankTier || 99) ||
         b.item.score - a.item.score ||
+        (a.item.rankTier || 99) - (b.item.rankTier || 99) ||
         statusOrder(a.item.status) - statusOrder(b.item.status) ||
         a.originalIndex - b.originalIndex
       ));
@@ -1331,6 +1352,7 @@
           <div style="min-width:0;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;">
               <a href="${escapeHtml(item.profileUrl)}" target="_blank" rel="noreferrer" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:900;color:${UI.navy};font-size:14px;text-decoration:none;">${absoluteIndex}. ${escapeHtml(displayName)}</a>
+              ${openedResumeCodes.has(item.resumeCode) ? `<span data-opened-marker style="flex:none;border:1px solid ${UI.success};border-radius:999px;background:${UI.successBg};color:${UI.success};padding:1px 7px;font-size:11px;font-weight:800;">已讀</span>` : ""}
             </div>
             ${renderRecentJobs(item)}
             ${renderScoreBreakdown(item)}
@@ -1356,6 +1378,15 @@
       else selectedResumeCodes.delete(code);
     });
     renderResults();
+  }
+
+  function isVisiblePageFullySelected() {
+    const codes = visibleSelectableCodes();
+    return codes.length > 0 && codes.every((code) => selectedResumeCodes.has(code));
+  }
+
+  function toggleVisibleSelection() {
+    setVisibleSelection(!isVisiblePageFullySelected());
   }
 
   function toggleResultSelection(code) {
@@ -1398,8 +1429,7 @@
     });
     resultNode.querySelectorAll("[data-select-action]").forEach((button) => {
       button.addEventListener("click", () => {
-        if (button.dataset.selectAction === "select-page") setVisibleSelection(true);
-        if (button.dataset.selectAction === "clear-page") setVisibleSelection(false);
+        if (button.dataset.selectAction === "toggle-page") toggleVisibleSelection();
       });
     });
     resultNode.querySelectorAll("[data-restore-excluded]").forEach((button) => {
@@ -1430,6 +1460,21 @@
     if (!copyButton) return;
     const count = selectedResumeCodes.size;
     copyButton.textContent = count ? `開啟勾選 ${count}` : "開啟勾選";
+    updateQuickOpenButton();
+  }
+
+  function updateQuickOpenButton() {
+    if (!quickOpenButton) return;
+    const eligible = sortResultsByScore(latestAllResults).filter((item) => item.status !== "excluded" && item.profileUrl);
+    const batch = nextUnreadHighScoreBatch(eligible, openedResumeCodes, 15);
+    quickOpenButton.disabled = isOpeningProfiles || !batch.length;
+    if (!batch.length) {
+      quickOpenButton.textContent = eligible.length ? "高分履歷已全部開啟" : "掃描後可開啟前 15 筆";
+      return;
+    }
+    const firstRank = eligible.findIndex((item) => item.resumeCode === batch[0].resumeCode) + 1;
+    const lastRank = eligible.findIndex((item) => item.resumeCode === batch[batch.length - 1].resumeCode) + 1;
+    quickOpenButton.textContent = `開啟未讀高分履歷 ${firstRank}–${lastRank}`;
   }
 
   function renderResults(scanStats) {
@@ -1452,8 +1497,7 @@
         ${renderFilterButton("all", latestAllResults.length)}
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-        ${renderSelectionButton("select-page", "本頁全勾")}
-        ${renderSelectionButton("clear-page", "本頁全不勾")}
+        ${renderSelectionButton("toggle-page", isVisiblePageFullySelected() ? "取消本頁全選" : "本頁全選")}
         ${latestExcluded.length ? `<button data-restore-excluded style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">還原排除卡片</button>` : ""}
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:${UI.muted};font-size:12px;">
@@ -1487,20 +1531,59 @@
       setStatus("目前沒有勾選可開啟的履歷；請先在排名清單勾選。");
       return;
     }
+    isOpeningProfiles = true;
     copyButton.disabled = true;
+    updateQuickOpenButton();
     setStatus(`準備開啟 ${profiles.length} 個已勾選履歷分頁。`);
-    for (const [index, item] of profiles.entries()) {
-      GM_openInTab(item.profileUrl, {
-        active: index === 0,
-        insert: true,
-        setParent: true
-      });
-      setSummary(`已開啟 ${index + 1}/${profiles.length} 個履歷分頁`);
-      setProgress(Math.round(((index + 1) / profiles.length) * 100), `${index + 1}/${profiles.length}`);
-      await sleep(180);
+    try {
+      for (const [index, item] of profiles.entries()) {
+        GM_openInTab(item.profileUrl, {
+          active: index === 0,
+          insert: true,
+          setParent: true
+        });
+        openedResumeCodes.add(item.resumeCode);
+        setSummary(`已開啟 ${index + 1}/${profiles.length} 個履歷分頁`);
+        setProgress(Math.round(((index + 1) / profiles.length) * 100), `${index + 1}/${profiles.length}`);
+        await sleep(180);
+      }
+    } finally {
+      isOpeningProfiles = false;
+      copyButton.disabled = false;
+      renderResults();
     }
-    setStatus(`已開啟 ${profiles.length} 個已勾選履歷分頁。`);
-    copyButton.disabled = false;
+    setStatus(`已開啟 ${profiles.length} 個已勾選履歷分頁，清單已標示為「已讀」。`);
+  }
+
+  async function openNextUnreadHighScoreProfiles() {
+    if (isOpeningProfiles) return;
+    const profiles = nextUnreadHighScoreBatch(latestAllResults, openedResumeCodes, 15);
+    if (!profiles.length) {
+      setStatus("目前沒有尚未開啟的高分履歷。");
+      updateQuickOpenButton();
+      return;
+    }
+    isOpeningProfiles = true;
+    copyButton.disabled = true;
+    updateQuickOpenButton();
+    setStatus(`準備依分數開啟下一批 ${profiles.length} 筆未讀履歷。`);
+    try {
+      for (const [index, item] of profiles.entries()) {
+        GM_openInTab(item.profileUrl, {
+          active: index === 0,
+          insert: true,
+          setParent: true
+        });
+        openedResumeCodes.add(item.resumeCode);
+        setSummary(`本批已開啟 ${index + 1}/${profiles.length} 筆高分履歷`);
+        await sleep(180);
+      }
+    } finally {
+      isOpeningProfiles = false;
+      copyButton.disabled = false;
+      renderResults();
+    }
+    setStatus(`已開啟 ${profiles.length} 筆高分履歷，清單已標示為「已讀」。再次點擊會接續下一批。`);
   }
 
   async function scan() {
@@ -1521,6 +1604,8 @@
     latestCardsByCode = new Map();
     latestScoreByCode = new Map();
     selectedResumeCodes = new Set();
+    openedResumeCodes = new Set();
+    isOpeningProfiles = false;
     currentResultFilter = "ranked";
     currentResultPage = 1;
     resultNode.innerHTML = "";
@@ -1587,10 +1672,10 @@
       latestScoreByCode = new Map(scoredItems.map((item) => [item.resumeCode, item]));
       const movedCards = reorderLoadedCardsByScore(scoredItems);
       const hiddenExcludedCards = hideExcludedCards(scoredItems);
-      latestRanked = applyCardElementAvailability(ranking.ranked);
-      latestReviewRequired = applyCardElementAvailability(ranking.reviewRequired);
-      latestExcluded = applyCardElementAvailability(ranking.excluded);
-      latestAllResults = latestRanked.concat(latestReviewRequired).concat(latestExcluded);
+      latestRanked = sortResultsByScore(applyCardElementAvailability(ranking.ranked));
+      latestReviewRequired = sortResultsByScore(applyCardElementAvailability(ranking.reviewRequired));
+      latestExcluded = sortResultsByScore(applyCardElementAvailability(ranking.excluded));
+      latestAllResults = sortResultsByScore(applyCardElementAvailability(ranking.allResults));
       latestCardsByCode = cardsByCode;
       renderResults({
         scannedCount: cards.length,
@@ -1620,7 +1705,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, nextUnreadHighScoreBatch});
     return;
   }
 
