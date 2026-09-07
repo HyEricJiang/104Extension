@@ -1,72 +1,50 @@
-# 104 隱藏履歷卡片與共用規則標示
+# 104 履歷篩選與排序 v4.0.0
 
-這個資料夾保留 Google Sheet / Apps Script 共用規則服務，以及舊 hide-only userscript 的 deprecated 提示。
+此資料夾提供鴻揚科技 104 VIP 人才搜尋頁使用的 Tampermonkey 前端腳本。
 
-新版架構已整合到 [104 Resume Screening Unified](/Users/sunrisesundown/Documents/AI_HR_Workflow/resume-screening-system/userscripts/104-resume-screening-collector.user.js)。Tampermonkey 請安裝整合版，不要再安裝 `104-hide-resume-cards.user.js`。
+前端負責讀取履歷卡片、取得履歷詳情、操作掃描介面及呈現結果。職缺規則、權重、核心資格判斷與排序邏輯由公司限定的 Google Apps Script 後端執行，不包含在這個 Git 專案中。
 
-## 隱藏規則
+## 安裝
 
-當履歷卡片符合以下任一條件時，就會被隱藏：
+1. 開啟 [`104-hide-resume-cards.user.js`](./104-hide-resume-cards.user.js)。
+2. 複製完整內容到 Tampermonkey，取代舊版腳本並儲存。
+3. 以鴻揚科技 Google Workspace 帳號登入。
+4. 重新整理 104 VIP 人才搜尋頁。
+5. 從右下角面板選擇職缺，再按「掃描並依分數排序」。
 
-- 卡片中有備註區塊：`.resume-remark.mt-2`
-- 近三個月的歷程中有包含「發出」的紀錄，代表我們曾主動聯繫對方
-- 如果 `CONFIG.RISK_ACTION` 改成 `hide`，命中高/中高信心博弈風險規則也會隱藏；預設為 `review`，只標示人工覆核。
-
-目前可涵蓋的歷程情境包含：
-
-- `發出聊聊通知`
-- `發出詢問意願通知`
-- 其他歷程文字中包含「發出」的主動聯繫紀錄
-
-例如「應徵履歷」不包含「發出」，目前不會因為這個情境被隱藏。
-
-履歷代碼回查模式，例如搜尋 `20000001931331`，不會自動隱藏卡片，避免回查名單時人數變少。
-
-## 共用規則標示
-
-Tampermonkey 會在卡片上方插入 badge：
-
-- `SI +3`：命中同業/SI/軟體服務加分規則。
-- `博弈風險 +5｜人工覆核`：命中博弈風險規則，預設只提示人工覆核。
-- 低信心規則會以虛線 badge 呈現，只提示，不參與自動隱藏。
-
-滑鼠停在 badge 上可看到命中詞、規則名稱、可信度、備註與來源 URL。
-
-## 同仁要去哪裡新增公司
-
-部署 Apps Script 後會建立一份 Google Sheet。打開後先看 `維護入口` 分頁：
-
-- 要新增 SI / 同業 / 軟體服務公司：到 `加分_乙方SI軟體服務` 新增一列。
-- 要新增博弈 / 博奕 / 娛樂城風險公司：到 `風險_博弈相關` 新增一列。
-- 要新增博弈關鍵字或 SI 關鍵字：到 `關鍵字_正規化規則` 新增一列。
-
-新增時先把 `啟用` 留 `FALSE`，資料確認後改成 `TRUE`。Tampermonkey 會在約 60 秒內抓到更新。
-
-## 檔案
-
-- `104-hide-resume-cards.user.js`
-- `apps-script/rule-service/`：Google Sheet 規則服務。
-- `src/rule-matcher.js`：可測的規則比對邏輯。
-- `tests/rule-matcher.test.js`：Tampermonkey 規則 fixture 測試。
-
-## 安裝方式
-
-1. 依照 [Apps Script 規則服務 README](/Users/sunrisesundown/Documents/AI_HR_Workflow/104-hide-resume-cards/apps-script/rule-service/README.md) 部署 Web App。
-2. 複製 `.../exec?action=rules` URL。
-3. 將 [104-resume-screening-collector.user.js](/Users/sunrisesundown/Documents/AI_HR_Workflow/resume-screening-system/userscripts/104-resume-screening-collector.user.js) 貼到 Tampermonkey。
-4. 把整合腳本設定區的 `RULES_API_URL` 改成你的 Apps Script URL。
-
-如果 104 頁面顯示「規則 API 回傳 HTML，不是 JSON」，代表 Apps Script URL 目前不是公開 JSON。請先用無痕視窗打開 `.../exec?action=rules`，確認畫面從 `{` 開始；若不是，回 Apps Script 重新部署 Web App，權限設為 `Execute as: Me` 與 `Anyone with the link`。
-
-腳本會在以下網址執行：
+腳本適用網址：
 
 ```text
-https://*.104.com.tw/*
+https://vip.104.com.tw/search/searchResult*
 ```
 
-## 本機測試
+## v4 功能
 
-```bash
-cd /Users/sunrisesundown/Documents/AI_HR_Workflow/104-hide-resume-cards
-npm test
-```
+- 支援 Java、C#/.NET、系統分析、QA／軟體測試及 PM 職缺。
+- 依核心能力、期待職稱、工作經歷、薪資、穩定性與職缺專屬條件排序。
+- QA 會區分純軟體測試、硬體／韌體測試及開發轉測試傾向。
+- TOEIC、英文寫作、海外留學與外商經驗可依 QA 條件加分。
+- 年薪下限達新台幣 100 萬時降低順位；月薪、面議與外幣不自動換算。
+- PM 必須能確認至少三年實際 PM 職稱經驗。
+- 有備註或近三個月已主動聯繫的履歷會列入排除結果。
+- 結果可展開查看此次實際套用的唯讀加扣分明細。
+
+## 權限與資料流
+
+- 後端只允許「鴻揚科技有限公司中的所有使用者」存取。
+- 前端不下載完整規則，也不提供修改權重的控制項。
+- 姓名及履歷連結只留在目前 104 頁面；送至後端的是判斷所需的履歷內容與履歷代碼。
+- 後端回傳總分、排序層級、狀態、顯示標籤與該次加扣分明細。
+
+使用者可在瀏覽器回應中看到個別候選人的明細，因此仍可能推測部分權重；Apps Script 專案與規則試算表的編輯權限應限於維護者。
+
+## 維護
+
+正式腳本檔名維持 `104-hide-resume-cards.user.js`，讓既有安裝流程可以直接取代舊版。若後端部署網址變更，請同步更新腳本設定區的 `RULES_API_URL`。
+
+更新後請確認：
+
+- 腳本版本顯示 `4.0.0`。
+- 公司帳號可連線，匿名或外部帳號無法使用。
+- 五種職缺皆能完成掃描。
+- 加扣分明細可展開，且沒有可修改權重的欄位。
