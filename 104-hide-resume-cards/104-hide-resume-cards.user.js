@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.1.3
+// @version      4.1.4
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -89,6 +89,16 @@
     accent: "#67439b",
     accentBg: "#f3eefb"
   });
+  const TAG_COLORS = Object.freeze({
+    "核心技術": Object.freeze({ background: "#ede9fe", border: "#c4b5fd", color: "#5b21b6" }),
+    "SI同業": Object.freeze({ background: "#cffafe", border: "#67e8f9", color: "#155e75" }),
+    "人工覆核": Object.freeze({ background: "#fee2e2", border: "#fca5a5", color: "#991b1b" }),
+    "排除": Object.freeze({ background: "#ffedd5", border: "#fdba74", color: "#9a3412" })
+  });
+  const SCORE_COLORS = Object.freeze({
+    qualified: Object.freeze({ background: "#dcfce7", border: "#86efac", color: "#166534" }),
+    unqualified: Object.freeze({ background: "#ffedd5", border: "#fdba74", color: "#9a3412" })
+  });
 
   let isScanning = false;
   let panel;
@@ -121,6 +131,8 @@
   let isCollapsed = true;
   let isPrintHidden = false;
   let scanCancellationRequested = false;
+  let tooltipNode;
+  let activeTooltipTarget;
   const cardTextCache = new WeakMap();
   const cardRuleMatchCache = new WeakMap();
   const sharedRuleState = {
@@ -134,6 +146,7 @@
   function mountPanel() {
     if (panel || !document.body) return;
     injectPrintStyle();
+    setupTagTooltips();
     panel = document.createElement("div");
     panel.id = "resume-screening-104-panel";
     panel.style.cssText = [
@@ -163,7 +176,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.3</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.4</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -358,12 +371,21 @@
         min-height: 22px;
         padding: 2px 8px;
         border-radius: 6px;
-        background: ${UI.navy};
-        color: #fff;
+        border: 1px solid transparent;
         font: 700 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
         max-width: 92px;
         box-sizing: border-box;
         white-space: nowrap;
+      }
+      .resume-screening-score-badge--qualified {
+        border-color: ${SCORE_COLORS.qualified.border};
+        background: ${SCORE_COLORS.qualified.background};
+        color: ${SCORE_COLORS.qualified.color};
+      }
+      .resume-screening-score-badge--unqualified {
+        border-color: ${SCORE_COLORS.unqualified.border};
+        background: ${SCORE_COLORS.unqualified.background};
+        color: ${SCORE_COLORS.unqualified.color};
       }
       .resume-screening-result-tag {
         display: inline-flex;
@@ -407,8 +429,83 @@
         color: ${UI.danger};
         font-weight: 800;
       }
+      [data-resume-tag-tooltip] { cursor: help; }
+      [data-resume-tag-tooltip]:focus-visible {
+        outline: 2px solid ${UI.navy};
+        outline-offset: 2px;
+      }
     `;
     (document.head || document.documentElement).append(style);
+  }
+
+  function ensureTooltipNode() {
+    if (tooltipNode?.isConnected) return tooltipNode;
+    tooltipNode = document.createElement("div");
+    tooltipNode.id = "resume-screening-tag-tooltip";
+    tooltipNode.setAttribute("role", "tooltip");
+    tooltipNode.style.cssText = [
+      "display:none", "position:fixed", "z-index:2147483647",
+      "max-width:min(360px,calc(100vw - 16px))", "padding:9px 11px",
+      `border:1px solid ${UI.borderStrong}`, "border-radius:8px", `background:${UI.ink}`,
+      "color:#fff", "box-shadow:0 10px 28px rgba(15,39,66,.24)",
+      "font:12px/1.55 system-ui,-apple-system,BlinkMacSystemFont,'Noto Sans TC',sans-serif",
+      "white-space:pre-line", "word-break:break-word", "pointer-events:none"
+    ].join(";");
+    document.body.append(tooltipNode);
+    return tooltipNode;
+  }
+
+  function showTagTooltip(target) {
+    const detail = target?.dataset?.resumeTagTooltip;
+    if (!detail) return;
+    const tooltip = ensureTooltipNode();
+    activeTooltipTarget?.removeAttribute("aria-describedby");
+    activeTooltipTarget = target;
+    target.setAttribute("aria-describedby", tooltip.id);
+    tooltip.textContent = detail;
+    tooltip.style.display = "block";
+    tooltip.style.visibility = "hidden";
+    const targetRect = target.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const margin = 8;
+    const left = clamp(targetRect.left, margin, Math.max(margin, window.innerWidth - tooltipRect.width - margin));
+    const top = targetRect.top >= tooltipRect.height + margin * 2
+      ? targetRect.top - tooltipRect.height - margin
+      : Math.min(window.innerHeight - tooltipRect.height - margin, targetRect.bottom + margin);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${Math.max(margin, top)}px`;
+    tooltip.style.visibility = "visible";
+  }
+
+  function hideTagTooltip() {
+    activeTooltipTarget?.removeAttribute("aria-describedby");
+    activeTooltipTarget = null;
+    if (tooltipNode) tooltipNode.style.display = "none";
+  }
+
+  function setupTagTooltips() {
+    if (setupTagTooltips.done) return;
+    setupTagTooltips.done = true;
+    document.addEventListener("mouseover", (event) => {
+      const target = event.target.closest?.("[data-resume-tag-tooltip]");
+      if (target && !target.contains(event.relatedTarget)) showTagTooltip(target);
+    });
+    document.addEventListener("mouseout", (event) => {
+      const target = event.target.closest?.("[data-resume-tag-tooltip]");
+      if (target && !target.contains(event.relatedTarget)) hideTagTooltip();
+    });
+    document.addEventListener("focusin", (event) => {
+      const target = event.target.closest?.("[data-resume-tag-tooltip]");
+      if (target) showTagTooltip(target);
+    });
+    document.addEventListener("focusout", (event) => {
+      if (event.target.closest?.("[data-resume-tag-tooltip]")) hideTagTooltip();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") hideTagTooltip();
+    });
+    document.addEventListener("scroll", hideTagTooltip, true);
+    window.addEventListener("resize", hideTagTooltip);
   }
 
   function hidePanelForPrint() {
@@ -863,7 +960,8 @@
       container.append(badge);
     }
     badge.textContent = reason === "已有備註" ? "#已有備註" : `#近${MONTHS_TO_HIDE}個月已邀約`;
-    badge.title = reason;
+    badge.style.cssText += `;${tagBadgeStyle(badge.textContent)}`;
+    setBadgeTooltip(badge, reason);
   }
 
   function rememberSkippedCard(card, reason) {
@@ -1058,6 +1156,35 @@
   function cleanupJobTitle(value) { return normalizeText(value); }
   function reasonTagLabel() { return "待確認"; }
   function tagKey(value) { return "#" + normalizeText(value).replace(/^#/, ""); }
+  function normalizedTagName(value) { return normalizeText(value).replace(/^#/, ""); }
+  function generatedTagColor(value) {
+    const name = normalizedTagName(value);
+    let hash = 0;
+    [...name].forEach((character) => { hash = ((hash << 5) - hash + character.codePointAt(0)) | 0; });
+    const hue = Math.abs(hash) % 360;
+    return {background:`hsl(${hue} 72% 94%)`, border:`hsl(${hue} 48% 76%)`, color:`hsl(${hue} 58% 28%)`};
+  }
+  function tagColor(value) { const name = normalizedTagName(value); return TAG_COLORS[name] || generatedTagColor(name); }
+  function tagBadgeStyle(value) {
+    const color = tagColor(value);
+    return `border-color:${color.border};background:${color.background};color:${color.color}`;
+  }
+  function isQualifiedItem(item) { return item.status === "ranked"; }
+  function scoreColor(item) { return isQualifiedItem(item) ? SCORE_COLORS.qualified : SCORE_COLORS.unqualified; }
+  function scoreBadgeStyle(item) {
+    const color = scoreColor(item);
+    return `border:1px solid ${color.border};border-radius:8px;background:${color.background};color:${color.color};padding:2px 8px;font-weight:800`;
+  }
+  function scoreTooltip(item) {
+    const statusText = isQualifiedItem(item) ? "合格" : item.status === "review_required" ? "需人工覆核" : "不合格／排除";
+    const details = [item.scoreExplanation, ...(item.displayReasons || []), ...(item.reasons || [])].filter(Boolean);
+    return [`判定：${statusText}`, `分數：${Number(item.score) || 0}`, ...uniqueList(details).slice(0, 6)].join("\n");
+  }
+  function setBadgeTooltip(badge, detail) {
+    badge.dataset.resumeTagTooltip = detail;
+    badge.tabIndex = 0;
+    badge.setAttribute("aria-label", `${badge.textContent}：${detail}`);
+  }
   function clientConfigNumber(group, key, fallback) { return fallback; }
   function clientTimingValue(key, fallback) { return fallback; }
 
@@ -1212,11 +1339,12 @@
     if (!badge) {
       badge = document.createElement("span");
       badge.dataset.resumeScoreBadge = "true";
-      badge.className = "resume-screening-score-badge";
       container.prepend(badge);
     }
-    badge.textContent = item.status === "excluded" ? "排除" : `分數 ${item.score}`;
-    badge.title = item.reasons.slice(0, 5).join("\n");
+    const qualified = isQualifiedItem(item);
+    badge.className = `resume-screening-score-badge resume-screening-score-badge--${qualified ? "qualified" : "unqualified"}`;
+    badge.textContent = `${item.score}｜${qualified ? "合格" : item.status === "review_required" ? "覆核" : "不合格"}`;
+    setBadgeTooltip(badge, scoreTooltip(item));
     renderBackendResultTags(card, item);
   }
 
@@ -1229,7 +1357,8 @@
       badge.dataset.resumeResultTag = "true";
       badge.className = `resume-screening-result-tag resume-screening-result-tag--${resultTagTone(tag, item)}`;
       badge.textContent = tagKey(tag);
-      badge.title = tagTooltip(tag, item);
+      badge.style.cssText += `;${tagBadgeStyle(tag)}`;
+      setBadgeTooltip(badge, tagTooltip(tag, item));
       container.append(badge);
     });
   }
@@ -1530,6 +1659,7 @@
     const disabled = item.profileUrl ? "" : "disabled";
     const displayTags = (item.displayTags && item.displayTags.length ? item.displayTags : (item.reasons || []).map((reason) => `#${reasonTagLabel(reason)}`)).slice(0, 9);
     const displayName = normalizeText(item.candidateName) || `候選人 ${absoluteIndex}`;
+    const scoreDetail = scoreTooltip(item);
     return `
       <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid ${UI.border};border-radius:8px;background:${UI.surface};padding:10px 10px 9px;cursor:${item.profileUrl ? "pointer" : "default"};box-shadow:0 1px 2px rgba(15,39,66,.04);" title="${item.profileUrl ? "點擊卡片可切換勾選" : ""}">
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:start;">
@@ -1542,10 +1672,10 @@
             ${renderRecentJobs(item)}
             ${renderScoreBreakdown(item)}
             <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:7px;">
-              ${displayTags.map((tag) => `<span title="${escapeHtml(tagTooltip(tag, item))}" style="border:1px solid ${UI.border};border-radius:999px;background:${UI.page};color:${UI.muted};padding:1px 7px;font-size:11px;font-weight:650;">${escapeHtml(tag)}</span>`).join("")}
+              ${displayTags.map((tag) => `<span data-resume-tag-tooltip="${escapeHtml(tagTooltip(tag, item))}" tabindex="0" aria-label="${escapeHtml(`${tag}：${tagTooltip(tag, item)}`)}" style="border-radius:999px;padding:1px 7px;font-size:11px;font-weight:700;${tagBadgeStyle(tag)}">${escapeHtml(tag)}</span>`).join("")}
             </div>
           </div>
-          <strong style="background:${UI.navy};color:#fff;border-radius:8px;padding:2px 8px;">${item.score}</strong>
+          <strong data-resume-tag-tooltip="${escapeHtml(scoreDetail)}" tabindex="0" aria-label="${escapeHtml(scoreDetail)}" style="${scoreBadgeStyle(item)}">${item.score}</strong>
         </div>
       </article>
     `;
@@ -1894,7 +2024,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, resultTagTone});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, resultTagTone, tagColor, isQualifiedItem, scoreTooltip});
     return;
   }
 
