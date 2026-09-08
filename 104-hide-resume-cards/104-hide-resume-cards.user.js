@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.1.1
+// @version      4.1.2
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -51,6 +51,7 @@
   const BOTTOM_STABLE_ROUNDS = 5;
   const FINAL_BOTTOM_SETTLE_ROUNDS = 4;
   const SCROLL_HEIGHT_STABLE_ROUNDS = 2;
+  const MONTHS_TO_HIDE = 3;
   const PANEL_POSITION_KEY = "resume-screening-104-panel-position";
   const RULES_API_URL = "https://script.google.com/a/macros/hy-tech.com.tw/s/AKfycbxkf5Cmf-mulR-MCny4fSppNCyuqV6BpjZul7AQ8mDc1jBVb4FSyTcvyT_OOix3sAXB/exec";
   const SHARED_RULES_CACHE_KEY = "104-hide-resume-cards.shared-rules-cache.v1";
@@ -160,7 +161,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.1</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.2</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -354,6 +355,23 @@
         background: ${UI.navy};
         color: #fff;
         font: 700 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+      }
+      .resume-screening-result-tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        padding: 2px 8px;
+        border: 1px solid ${UI.border};
+        border-radius: 999px;
+        background: ${UI.page};
+        color: ${UI.muted};
+        font: 650 11px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+      }
+      .resume-screening-result-tag--skip {
+        border-color: ${UI.warning};
+        background: ${UI.warningBg};
+        color: ${UI.warning};
+        font-weight: 800;
       }
     `;
     (document.head || document.documentElement).append(style);
@@ -696,6 +714,36 @@
     return match?.[1] || "";
   }
 
+  function parseOutreachHistoryDate(text) {
+    const match = String(text || "").match(/(\d{4})[/.\-](\d{1,2})[/.\-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?/);
+    if (!match) return null;
+    const date = new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4] || 0),
+      Number(match[5] || 0)
+    );
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function isRecentActiveOutreachText(text, now = new Date(), monthsToHide = MONTHS_TO_HIDE) {
+    if (!/發出(?:邀約|面試邀約|職缺邀約|通知|訊息|信件)?/.test(String(text || ""))) return false;
+    const historyDate = parseOutreachHistoryDate(text);
+    if (!historyDate) return false;
+    const currentDate = new Date(now);
+    const cutoff = new Date(currentDate);
+    cutoff.setMonth(cutoff.getMonth() - monthsToHide);
+    cutoff.setHours(0, 0, 0, 0);
+    return historyDate >= cutoff && historyDate <= currentDate;
+  }
+
+  function skipReasonFromSignals({ hasRemark = false, historyEntries = [], now = new Date() } = {}) {
+    if (hasRemark) return "已有備註";
+    const hasRecentOutreach = historyEntries.some((text) => isRecentActiveOutreachText(text, now));
+    return hasRecentOutreach ? `近 ${MONTHS_TO_HIDE} 個月已有發出紀錄` : "";
+  }
+
   function isResumeCodeLookupMode() {
     const url = new URL(location.href);
     const kws = url.searchParams.get("kws") || "";
@@ -711,6 +759,7 @@
     document.querySelectorAll("[data-resume-screening-skipped]").forEach((card) => {
       delete card.dataset.resumeScreeningSkipped;
       card.style.removeProperty("display");
+      card.querySelector("[data-resume-skip-badge]")?.remove();
     });
     skippedCards = new Map();
   }
@@ -735,7 +784,12 @@
     return hidden;
   }
 
-  function getSkipReason() { return ""; }
+  function getSkipReason(card) {
+    return skipReasonFromSignals({
+      hasRemark: Boolean(card.querySelector(".resume-remark.mt-2, .resume-remark, [data-qa-id='resumeRemark']")),
+      historyEntries: textsFromSelectors(card, [".history-list__collapse .list-txt"])
+    });
+  }
 
   function processedCount(cardsByCode) {
     return cardsByCode.size + skippedCards.size;
@@ -763,6 +817,19 @@
   function hideSkippedCard(card, reason) {
     card.dataset.resumeScreeningSkipped = reason;
     card.style.setProperty("display", "none", "important");
+  }
+
+  function renderSkipReasonBadge(card, reason) {
+    const container = ensureBadgeContainer(card);
+    let badge = container.querySelector("[data-resume-skip-badge]");
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.dataset.resumeSkipBadge = "true";
+      badge.className = "resume-screening-result-tag resume-screening-result-tag--skip";
+      container.append(badge);
+    }
+    badge.textContent = reason === "已有備註" ? "#已有備註" : `#近${MONTHS_TO_HIDE}個月已邀約`;
+    badge.title = reason;
   }
 
   function rememberSkippedCard(card, reason) {
@@ -849,8 +916,32 @@
     return container;
   }
 
-  function filterResumeCards() {
-    if (!shouldHideCardsOnThisPage()) restoreHiddenCards();
+  function filterResumeCards(options = {}) {
+    if (!shouldHideCardsOnThisPage()) {
+      restoreHiddenCards();
+      return;
+    }
+    const maxCards = options.force || isScanning ? Infinity : FILTER_MAX_CARDS_PER_PASS;
+    const cards = [...document.querySelectorAll(CARD_SELECTOR)];
+    let processed = 0;
+
+    for (const card of cards) {
+      const filterKey = cardFilterKey(card);
+      if (!options.force && card.dataset.resumeScreeningFilterKey === filterKey) continue;
+
+      const reason = getSkipReason(card);
+      if (reason) {
+        renderSkipReasonBadge(card, reason);
+        rememberSkippedCard(card, reason);
+        hideSkippedCard(card, reason);
+      }
+      card.dataset.resumeScreeningFilterKey = cardFilterKey(card);
+      processed += 1;
+      if (processed >= maxCards) {
+        if (!isScanning) scheduleFilterResumeCards(FILTER_DEBOUNCE_MS);
+        break;
+      }
+    }
   }
 
   function scheduleFilterResumeCards(delay = FILTER_DEBOUNCE_MS) {
@@ -1083,6 +1174,21 @@
     }
     badge.textContent = item.status === "excluded" ? "排除" : `分數 ${item.score}`;
     badge.title = item.reasons.slice(0, 5).join("\n");
+    renderBackendResultTags(card, item);
+  }
+
+  function renderBackendResultTags(card, item) {
+    const container = ensureBadgeContainer(card);
+    container.querySelectorAll("[data-resume-result-tag]").forEach((node) => node.remove());
+    const tags = (item.displayTags || []).slice(0, BADGE_LIMIT);
+    tags.forEach((tag) => {
+      const badge = document.createElement("span");
+      badge.dataset.resumeResultTag = "true";
+      badge.className = "resume-screening-result-tag";
+      badge.textContent = tagKey(tag);
+      badge.title = tagTooltip(tag, item);
+      container.append(badge);
+    });
   }
 
   function reorderLoadedCardsByScore(scoredItems) {
@@ -1735,7 +1841,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals});
     return;
   }
 
