@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.1.2
+// @version      4.1.3
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -85,7 +85,9 @@
     warning: "#96530f",
     warningBg: "#fff4e5",
     danger: "#9f2f18",
-    dangerBg: "#fff1ed"
+    dangerBg: "#fff1ed",
+    accent: "#67439b",
+    accentBg: "#f3eefb"
   });
 
   let isScanning = false;
@@ -161,7 +163,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.2</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.3</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -310,10 +312,14 @@
       @media print { #resume-screening-104-panel { display: none !important; } }
       [data-resume-shared-rules-badges] {
         display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin: 6px 0 8px;
+        flex-direction: column;
+        flex-wrap: nowrap;
+        gap: 4px;
+        width: 96px;
+        max-width: 96px;
+        margin: 6px 0 0;
         align-items: center;
+        box-sizing: border-box;
       }
       .resume-shared-rule-badge {
         display: inline-flex;
@@ -355,6 +361,9 @@
         background: ${UI.navy};
         color: #fff;
         font: 700 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+        max-width: 92px;
+        box-sizing: border-box;
+        white-space: nowrap;
       }
       .resume-screening-result-tag {
         display: inline-flex;
@@ -365,12 +374,37 @@
         border-radius: 999px;
         background: ${UI.page};
         color: ${UI.muted};
-        font: 650 11px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+        max-width: 92px;
+        font: 650 10.5px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        box-sizing: border-box;
       }
-      .resume-screening-result-tag--skip {
+      .resume-screening-result-tag--positive {
+        border-color: ${UI.success};
+        background: ${UI.successBg};
+        color: ${UI.success};
+      }
+      .resume-screening-result-tag--accent {
+        border-color: ${UI.accent};
+        background: ${UI.accentBg};
+        color: ${UI.accent};
+      }
+      .resume-screening-result-tag--warning {
         border-color: ${UI.warning};
         background: ${UI.warningBg};
         color: ${UI.warning};
+      }
+      .resume-screening-result-tag--danger {
+        border-color: ${UI.danger};
+        background: ${UI.dangerBg};
+        color: ${UI.danger};
+      }
+      .resume-screening-result-tag--skip {
+        border-color: ${UI.danger};
+        background: ${UI.dangerBg};
+        color: ${UI.danger};
         font-weight: 800;
       }
     `;
@@ -906,10 +940,19 @@
 
   function ensureBadgeContainer(card) {
     let container = card.querySelector("[data-resume-shared-rules-badges]");
-    if (container) return container;
+    const photoBlock = card.querySelector(".phote-block");
+    if (container) {
+      if (photoBlock && container.parentElement !== photoBlock) photoBlock.append(container);
+      return container;
+    }
 
     container = document.createElement("div");
     container.dataset.resumeSharedRulesBadges = "true";
+    container.setAttribute("aria-label", "履歷篩選標籤");
+    if (photoBlock) {
+      photoBlock.append(container);
+      return container;
+    }
     const anchor = card.querySelector(".resume-card__center, .userInfo-wrap, .card-body") || card.firstElementChild;
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(container, anchor);
     else card.insertBefore(container, card.firstChild);
@@ -1184,11 +1227,21 @@
     tags.forEach((tag) => {
       const badge = document.createElement("span");
       badge.dataset.resumeResultTag = "true";
-      badge.className = "resume-screening-result-tag";
+      badge.className = `resume-screening-result-tag resume-screening-result-tag--${resultTagTone(tag, item)}`;
       badge.textContent = tagKey(tag);
       badge.title = tagTooltip(tag, item);
       container.append(badge);
     });
+  }
+
+  function resultTagTone(tag, item = {}) {
+    const detail = item.displayTagDetails?.[tag] || item.displayTagDetails?.[tagKey(tag)] || "";
+    const text = normalizeText(`${tag} ${detail} ${(item.reasons || []).join(" ")}`);
+    if (item.status === "excluded" || /(排除|博弈|硬體|韌體|已聯繫|備註)/i.test(text)) return "danger";
+    if (/(薪資過高|年薪過高|轉職|空窗|不穩定|不符|不足|待確認|低分)/i.test(text)) return "warning";
+    if (/(核心技術|年資符合|專案符合|英文|TOEIC|多益|海外|外商)/i.test(text)) return "positive";
+    if (/(SI同業|同業|大型企業|學歷|名校)/i.test(text)) return "accent";
+    return "info";
   }
 
   function reorderLoadedCardsByScore(scoredItems) {
@@ -1841,7 +1894,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, resultTagTone});
     return;
   }
 
