@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.1.4
+// @version      4.1.5
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -89,15 +89,10 @@
     accent: "#67439b",
     accentBg: "#f3eefb"
   });
-  const TAG_COLORS = Object.freeze({
-    "核心技術": Object.freeze({ background: "#ede9fe", border: "#c4b5fd", color: "#5b21b6" }),
-    "SI同業": Object.freeze({ background: "#cffafe", border: "#67e8f9", color: "#155e75" }),
-    "人工覆核": Object.freeze({ background: "#fee2e2", border: "#fca5a5", color: "#991b1b" }),
-    "排除": Object.freeze({ background: "#ffedd5", border: "#fdba74", color: "#9a3412" })
-  });
+  const TAG_COLOR = Object.freeze({ background: "#eef9f8", border: "#a9d9d7", color: "#246f72" });
   const SCORE_COLORS = Object.freeze({
     qualified: Object.freeze({ background: "#dcfce7", border: "#86efac", color: "#166534" }),
-    unqualified: Object.freeze({ background: "#ffedd5", border: "#fdba74", color: "#9a3412" })
+    unqualified: Object.freeze({ background: "#fdecec", border: "#efb5b5", color: "#9f2f18" })
   });
 
   let isScanning = false;
@@ -176,7 +171,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.4</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.5</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -350,14 +345,14 @@
         box-sizing: border-box;
       }
       .resume-shared-rule-badge--positive {
-        border-color: ${UI.borderStrong};
-        background: ${UI.navySoft};
-        color: ${UI.navy};
+        border-color: ${TAG_COLOR.border};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
       }
       .resume-shared-rule-badge--risk {
-        border-color: #d98b78;
-        background: ${UI.dangerBg};
-        color: ${UI.danger};
+        border-color: ${TAG_COLOR.border};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
         font-weight: 700;
       }
       .resume-shared-rule-badge--low {
@@ -392,10 +387,10 @@
         align-items: center;
         min-height: 22px;
         padding: 2px 8px;
-        border: 1px solid ${UI.border};
+        border: 1px solid ${TAG_COLOR.border};
         border-radius: 999px;
-        background: ${UI.page};
-        color: ${UI.muted};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
         max-width: 92px;
         font: 650 10.5px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif;
         white-space: nowrap;
@@ -404,29 +399,29 @@
         box-sizing: border-box;
       }
       .resume-screening-result-tag--positive {
-        border-color: ${UI.success};
-        background: ${UI.successBg};
-        color: ${UI.success};
+        border-color: ${TAG_COLOR.border};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
       }
       .resume-screening-result-tag--accent {
-        border-color: ${UI.accent};
-        background: ${UI.accentBg};
-        color: ${UI.accent};
+        border-color: ${TAG_COLOR.border};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
       }
       .resume-screening-result-tag--warning {
-        border-color: ${UI.warning};
-        background: ${UI.warningBg};
-        color: ${UI.warning};
+        border-color: ${TAG_COLOR.border};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
       }
       .resume-screening-result-tag--danger {
-        border-color: ${UI.danger};
-        background: ${UI.dangerBg};
-        color: ${UI.danger};
+        border-color: ${TAG_COLOR.border};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
       }
       .resume-screening-result-tag--skip {
-        border-color: ${UI.danger};
-        background: ${UI.dangerBg};
-        color: ${UI.danger};
+        border-color: ${TAG_COLOR.border};
+        background: ${TAG_COLOR.background};
+        color: ${TAG_COLOR.color};
         font-weight: 800;
       }
       [data-resume-tag-tooltip] { cursor: help; }
@@ -1156,15 +1151,7 @@
   function cleanupJobTitle(value) { return normalizeText(value); }
   function reasonTagLabel() { return "待確認"; }
   function tagKey(value) { return "#" + normalizeText(value).replace(/^#/, ""); }
-  function normalizedTagName(value) { return normalizeText(value).replace(/^#/, ""); }
-  function generatedTagColor(value) {
-    const name = normalizedTagName(value);
-    let hash = 0;
-    [...name].forEach((character) => { hash = ((hash << 5) - hash + character.codePointAt(0)) | 0; });
-    const hue = Math.abs(hash) % 360;
-    return {background:`hsl(${hue} 72% 94%)`, border:`hsl(${hue} 48% 76%)`, color:`hsl(${hue} 58% 28%)`};
-  }
-  function tagColor(value) { const name = normalizedTagName(value); return TAG_COLORS[name] || generatedTagColor(name); }
+  function tagColor() { return TAG_COLOR; }
   function tagBadgeStyle(value) {
     const color = tagColor(value);
     return `border-color:${color.border};background:${color.background};color:${color.color}`;
@@ -2024,7 +2011,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, resultTagTone, tagColor, isQualifiedItem, scoreTooltip});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip});
     return;
   }
 
