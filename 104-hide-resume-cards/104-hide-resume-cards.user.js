@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.1.5
+// @version      4.2.0
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -43,6 +43,10 @@
     '#projects-component',
     '#portfolio-component',
     '#autobiography-component'
+  ].join(', ');
+  const EXPERIENCE_ENTRY_SELECTOR = [
+    '#experience-component div.pt-3.pb-2',
+    '#experience-component > div > div > div > div.py-3 > div:nth-child(2) > div'
   ].join(', ');
   const JOB_HISTORY_SELECTOR = ".content-list li";
   const PAGE_SIZE = 50;
@@ -171,7 +175,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.1.5</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.2.0</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -699,7 +703,7 @@
         .map((node) => normalizeText(node.textContent))
         .find((text) => /^(?:月薪|年薪)/.test(text)));
     const experienceText = normalizeText(root.querySelector("#experience-component")?.textContent);
-    const experienceEntries = uniqueList([...root.querySelectorAll("#experience-component div.pt-3.pb-2")]
+    const experienceEntries = uniqueList([...root.querySelectorAll(EXPERIENCE_ENTRY_SELECTOR)]
       .map((node) => normalizeText(node.textContent))
       .filter(Boolean));
     const educationText = normalizeText(root.querySelector("#education-component")?.textContent);
