@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.4.1
+// @version      4.4.2
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -31,7 +31,14 @@
   const WORK_EXPERIENCE_SELECTOR = '[data-qa-id="cardWorkExperience"]';
   const LANGUAGE_SELECTOR = '#language-component > div > div > div.py-4';
   const CERTIFICATE_SELECTOR = '#certificate-component > div > div';
-  const EXPECTED_SALARY_SELECTOR = '#jobCondition-component > div > div > div.py-4.py-md-5.r3.form-element-theme-container-fluid > div > div:nth-child(4) > div.col.d-flex > div';
+  const INFO_CURRENT_COMPANY_SELECTOR = '#info-component .info-container .job > span > span:nth-child(1)';
+  const INFO_CURRENT_TITLE_SELECTOR = '#info-component .info-container .job > span > span:nth-child(2)';
+  const INFO_SCHOOL_SELECTOR = '#info-component .info-container .edu > span:nth-child(1)';
+  const INFO_MAJOR_SELECTOR = '#info-component .info-container .edu > span:nth-child(2)';
+  const EXPECTED_SALARY_SELECTORS = Object.freeze([
+    '#jobCondition-component > div > div > div.py-4.py-md-6.r3.form-element-theme-container-fluid > div:nth-child(4) > div.col.d-inline-flex > div',
+    '#jobCondition-component > div > div > div.py-4.py-md-5.r3.form-element-theme-container-fluid > div > div:nth-child(4) > div.col.d-flex > div'
+  ]);
   const CURRENT_SALARY_SELECTOR = '#experience-component > div > div > div > div.pt-3.pb-2 > div:nth-child(2) > div > div:nth-child(1) > div > div > div > div.col.pr-0.pl-3.pl-md-0 > div > div.col-12.col-md.px-0.ml-0.ml-md-5 > div.experience-time-list__other-info.t4 > span:nth-child(2)';
   const DETAIL_CORE_SECTION_SELECTOR = [
     '#experience-component',
@@ -44,15 +51,6 @@
     '#portfolio-component',
     '#autobiography-component'
   ].join(', ');
-  const EXPERIENCE_ENTRY_SELECTOR = [
-    '#experience-component div.pt-3.pb-2',
-    '#experience-component > div > div > div > div.py-3 > div:nth-child(2) > div'
-  ].join(', ');
-  const EXPERIENCE_CONTENT_SELECTOR = [
-    '#experience-component > div > div > div > div.py-3 > div:nth-child(2) > div > div > div > div > div.col.col-12.col-md.order-last.pt-3.pt-md-0 > div:nth-child(2)',
-    '#experience-component > div > div > div > div.py-3 > div:nth-child(2) > div:nth-child(1) > div > div > div > div.col.col-12.col-md.order-last.pt-3.pt-md-0 > div:nth-child(2) > div'
-  ].join(', ');
-  const EXPERIENCE_TAG_SELECTOR = '#experience-component > div > div > div > div.py-3 > div:nth-child(2) > div:nth-child(1) > div > div > div > div.col.col-12.col-md.order-last.pt-3.pt-md-0 > div:nth-child(2) > div > span > span';
   const JOB_HISTORY_SELECTOR = ".content-list li";
   const PAGE_SIZE = 50;
   const FAST_SCROLL_DELAY_MS = 110;
@@ -68,8 +66,8 @@
   const DEFAULT_TTL_SECONDS = 60;
   const RISK_ACTION = "review";
   const ENABLE_INLINE_REORDER = true;
-  // 104 詳情頁為動態 App；背景 GET 只取得空殼 HTML，暫停無效補抓以避免大量誤判與多餘請求。
-  const ENABLE_DETAIL_ENRICHMENT = false;
+  // 保留 HTTP 詳情補抓；若 104 僅回傳動態 App 空殼，採 fail-soft 且不以此單一原因送人工覆核。
+  const ENABLE_DETAIL_ENRICHMENT = true;
   const DEFAULT_OPEN_LIMIT = 0;
   const RANKED_LIST_PAGE_SIZE = 50;
   const BADGE_LIMIT = 4;
@@ -183,7 +181,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.4.1</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.4.2</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -204,7 +202,7 @@
           <option value="qa-engineer">軟體測試 QA</option>
           <option value="project-manager">專案經理 PM</option>
         </select>
-        <div data-screening-status style="margin-bottom:10px;color:${UI.muted};font-size:12px;">只掃描目前頁，跳過已讀或 3 個月內已聯繫的人選</div>
+        <div data-screening-status style="margin-bottom:10px;color:${UI.muted};font-size:12px;">只掃描目前頁，跳過已有備註、已讀或 3 個月內已聯繫的人選</div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
           <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
           <button data-screening-copy style="height:36px;border:1px solid ${UI.borderStrong};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;">開啟勾選</button>
@@ -702,24 +700,42 @@
 
   function extractResumeDetail(root) {
     const desiredTitles = desiredTitlesFromRoot(root);
+    const currentCompanyName = normalizeText(root.querySelector(INFO_CURRENT_COMPANY_SELECTOR)?.textContent);
+    const currentJobTitle = normalizeText(root.querySelector(INFO_CURRENT_TITLE_SELECTOR)?.textContent);
+    const schoolName = normalizeText(root.querySelector(INFO_SCHOOL_SELECTOR)?.textContent);
+    const majorName = normalizeText(root.querySelector(INFO_MAJOR_SELECTOR)?.textContent);
     const languageText = normalizeText([...root.querySelectorAll(LANGUAGE_SELECTOR)].map((node) => node.textContent).join(" "));
     const certificateText = normalizeText([...root.querySelectorAll(CERTIFICATE_SELECTOR)].map((node) => node.textContent).join(" "));
-    const expectedSalaryText = normalizeText(root.querySelector(EXPECTED_SALARY_SELECTOR)?.textContent)
+    const expectedSalaryText = textsFromSelectors(root, EXPECTED_SALARY_SELECTORS)[0]
       || labelledSectionText(root, /希望待遇|期待待遇|希望薪資|期待薪資/);
     const currentSalaryText = normalizeText(root.querySelector(CURRENT_SALARY_SELECTOR)?.textContent)
       || normalizeText([...root.querySelectorAll("#experience-component .experience-time-list__other-info span")]
         .map((node) => normalizeText(node.textContent))
         .find((text) => /^(?:月薪|年薪)/.test(text)));
     const experienceText = normalizeText(root.querySelector("#experience-component")?.textContent);
-    const experienceEntries = uniqueList([...root.querySelectorAll(EXPERIENCE_ENTRY_SELECTOR)]
-      .map((node) => normalizeText(node.textContent))
-      .filter(Boolean));
-    const recentExperienceContentTexts = uniqueList([...root.querySelectorAll(EXPERIENCE_CONTENT_SELECTOR)]
-      .map((node) => normalizeText(node.textContent))
-      .filter(Boolean));
-    const recentExperienceTagTexts = uniqueList([...root.querySelectorAll(EXPERIENCE_TAG_SELECTOR)]
-      .map((node) => normalizeText(node.textContent))
-      .filter(Boolean));
+    const preferredExperienceEntries = [...root.querySelectorAll(
+      '#experience-component > div > div > div > div.py-3 > div:nth-child(2) > div'
+    )];
+    const experienceEntryNodes = preferredExperienceEntries.length
+      ? preferredExperienceEntries
+      : [...root.querySelectorAll('#experience-component div.pt-3.pb-2')];
+    const experienceRecords = experienceEntryNodes.map((node) => {
+      const jobName = normalizeText(node.querySelector('.experience-list-list__jobName')?.childNodes?.[0]?.nodeValue)
+        || normalizeText(node.querySelector('.experience-list-list__jobName')?.textContent).replace(/✨\s*AI 算薪水/g, '').trim();
+      const companyName = normalizeText(node.querySelector('.experience-list-list__companyName')?.textContent);
+      const jobCategory = normalizeText(node.querySelector('.experience-list-list__other-info')?.textContent);
+      const duration = normalizeText(node.querySelector('.experience-list-list__duration')?.textContent);
+      const content = normalizeText(node.querySelector('.experience-list-list__description')?.textContent);
+      const tags = uniqueList([...node.querySelectorAll('span')]
+        .map((tagNode) => normalizeText(tagNode.textContent))
+        .filter((text) => text.startsWith('#')));
+      const fullText = normalizeText([jobName, companyName, jobCategory, duration, content, tags.join(' ')].filter(Boolean).join(' | '));
+      return { jobName, companyName, jobCategory, duration, content, tags, fullText };
+    }).filter((entry) => entry.fullText);
+    const experienceEntries = experienceRecords.map((entry) => entry.fullText);
+    // 保留空字串，確保第 N 筆工作內容永遠對應第 N 筆工作，不因去重或過濾而錯位。
+    const recentExperienceContentTexts = experienceRecords.map((entry) => entry.content);
+    const recentExperienceTagTexts = uniqueList(experienceRecords.flatMap((entry) => entry.tags));
     const educationText = normalizeText(root.querySelector("#education-component")?.textContent);
     const coreSections = [...root.querySelectorAll(DETAIL_CORE_SECTION_SELECTOR)]
       .map((node) => normalizeText(node.textContent))
@@ -727,12 +743,17 @@
 
     return {
       status: coreSections.length ? "loaded" : "partial",
+      currentCompanyName,
+      currentJobTitle,
+      schoolName,
+      majorName,
       desiredTitles,
       languageText,
       certificateText,
       expectedSalaryText,
       currentSalaryText,
       experienceText,
+      experienceRecords,
       experienceEntries,
       recentExperienceContentTexts,
       recentExperienceTagTexts,
@@ -883,7 +904,8 @@
     return historyDate >= cutoff && historyDate <= currentDate;
   }
 
-  function skipReasonFromSignals({ isRead = false, historyEntries = [], now = new Date() } = {}) {
+  function skipReasonFromSignals({ hasRemark = false, isRead = false, historyEntries = [], now = new Date() } = {}) {
+    if (hasRemark) return "已有備註";
     if (isRead) return "履歷已讀";
     const hasRecentOutreach = historyEntries.some((text) => isRecentActiveOutreachText(text, now));
     return hasRecentOutreach ? `近 ${MONTHS_TO_HIDE} 個月已有發出紀錄` : "";
@@ -972,6 +994,7 @@
   function getSkipReason(card) {
     const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
     return skipReasonFromSignals({
+      hasRemark: Boolean(card.querySelector(".resume-remark.mt-2, .resume-remark, [data-qa-id='resumeRemark']")),
       isRead: isNativeReadCard(card) || openedResumeCodes.has(code),
       historyEntries: textsFromSelectors(card, [".history-list__collapse .list-txt"])
     });
@@ -1014,7 +1037,9 @@
       badge.className = "resume-screening-result-tag resume-screening-result-tag--skip";
       container.append(badge);
     }
-    badge.textContent = reason === "履歷已讀" ? "#已讀" : `#近${MONTHS_TO_HIDE}個月已邀約`;
+    badge.textContent = reason === "已有備註"
+      ? "#已有備註"
+      : reason === "履歷已讀" ? "#已讀" : `#近${MONTHS_TO_HIDE}個月已邀約`;
     badge.style.cssText += `;${tagBadgeStyle(badge.textContent)}`;
     setBadgeTooltip(badge, reason);
   }
@@ -1200,7 +1225,7 @@
       education: textsFromSelectors(card, [EDUCATION_SELECTOR]).join(" "),
       militaryStatus: normalizeText(card.querySelector(MILITARY_SELECTOR)?.textContent),
       workExperience: normalizeText(card.querySelector(WORK_EXPERIENCE_SELECTOR)?.textContent),
-      hasRemark: Boolean(card.querySelector(".resume-remark.mt-2")),
+      hasRemark: Boolean(card.querySelector(".resume-remark.mt-2, .resume-remark, [data-qa-id='resumeRemark']")),
       isRead: isNativeReadCard(card) || openedResumeCodes.has(resumeCode),
       historyEntries: textsFromSelectors(card, [".history-list__collapse .list-txt"]),
       detail: {status:"partial"}
