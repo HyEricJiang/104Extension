@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.2.2
+// @version      4.4.1
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -62,11 +62,14 @@
   const SCROLL_HEIGHT_STABLE_ROUNDS = 2;
   const MONTHS_TO_HIDE = 3;
   const PANEL_POSITION_KEY = "resume-screening-104-panel-position";
+  const READ_CODES_STORAGE_KEY = "resume-screening-104-read-codes.v1";
   const RULES_API_URL = "https://script.google.com/a/macros/hy-tech.com.tw/s/AKfycbxkf5Cmf-mulR-MCny4fSppNCyuqV6BpjZul7AQ8mDc1jBVb4FSyTcvyT_OOix3sAXB/exec";
   const SHARED_RULES_CACHE_KEY = "104-hide-resume-cards.shared-rules-cache.v1";
   const DEFAULT_TTL_SECONDS = 60;
   const RISK_ACTION = "review";
   const ENABLE_INLINE_REORDER = true;
+  // 104 詳情頁為動態 App；背景 GET 只取得空殼 HTML，暫停無效補抓以避免大量誤判與多餘請求。
+  const ENABLE_DETAIL_ENRICHMENT = false;
   const DEFAULT_OPEN_LIMIT = 0;
   const RANKED_LIST_PAGE_SIZE = 50;
   const BADGE_LIMIT = 4;
@@ -125,7 +128,7 @@
   let latestExcluded = [];
   let latestAllResults = [];
   let selectedResumeCodes = new Set();
-  let openedResumeCodes = new Set();
+  let openedResumeCodes = loadOpenedResumeCodes();
   let isOpeningProfiles = false;
   let currentResultFilter = "ranked";
   let currentResultPage = 1;
@@ -180,7 +183,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.2.2</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.4.1</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -201,7 +204,7 @@
           <option value="qa-engineer">軟體測試 QA</option>
           <option value="project-manager">專案經理 PM</option>
         </select>
-        <div data-screening-status style="margin-bottom:10px;color:${UI.muted};font-size:12px;">會跳過有備註或 3 個月內已發出的人選，並依分數排序</div>
+        <div data-screening-status style="margin-bottom:10px;color:${UI.muted};font-size:12px;">只掃描目前頁，跳過已讀或 3 個月內已聯繫的人選</div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
           <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
           <button data-screening-copy style="height:36px;border:1px solid ${UI.borderStrong};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;">開啟勾選</button>
@@ -809,15 +812,14 @@
   }
 
   function needsDetailEnrichment(roleId, role, card) {
-    // 薪資與完整期待職稱是五類職缺共用條件；QA 另需語言與證照，因此所有可讀取的履歷都補強詳情。
-    return Boolean(card.profileUrl);
+    return ENABLE_DETAIL_ENRICHMENT && Boolean(card.profileUrl);
   }
 
   async function enrichResumeDetails(roleId, role, cards) {
     const targets = cards.filter((card) => needsDetailEnrichment(roleId, role, card));
     if (!targets.length) {
-      setStageProgress(2, "詳情補強", 0, 0, 65, 85);
-      return { requested: 0, loaded: 0, failed: 0 };
+      setProgress(85, "第 2/4 階段 · 使用卡片資料（總完成 85%）");
+      return { requested: 0, loaded: 0, failed: 0, disabled: !ENABLE_DETAIL_ENRICHMENT };
     }
 
     let cursor = 0;
@@ -881,10 +883,50 @@
     return historyDate >= cutoff && historyDate <= currentDate;
   }
 
-  function skipReasonFromSignals({ hasRemark = false, historyEntries = [], now = new Date() } = {}) {
-    if (hasRemark) return "已有備註";
+  function skipReasonFromSignals({ isRead = false, historyEntries = [], now = new Date() } = {}) {
+    if (isRead) return "履歷已讀";
     const hasRecentOutreach = historyEntries.some((text) => isRecentActiveOutreachText(text, now));
     return hasRecentOutreach ? `近 ${MONTHS_TO_HIDE} 個月已有發出紀錄` : "";
+  }
+
+  function loadOpenedResumeCodes() {
+    if (typeof localStorage === "undefined") return new Set();
+    try {
+      const values = JSON.parse(localStorage.getItem(READ_CODES_STORAGE_KEY) || "[]");
+      return new Set(Array.isArray(values) ? values.map(String).filter(Boolean) : []);
+    } catch (error) {
+      console.warn("無法讀取已讀履歷清單，將以空清單繼續", error);
+      return new Set();
+    }
+  }
+
+  function persistOpenedResumeCodes() {
+    if (typeof localStorage === "undefined") return;
+    try {
+      localStorage.setItem(READ_CODES_STORAGE_KEY, JSON.stringify([...openedResumeCodes].slice(-5000)));
+    } catch (error) {
+      console.warn("無法保存已讀履歷清單", error);
+    }
+  }
+
+  function rememberOpenedResumeCode(code) {
+    if (!code) return;
+    openedResumeCodes.add(String(code));
+    persistOpenedResumeCodes();
+  }
+
+  function isNativeReadCard(card) {
+    if (!card) return false;
+    if (card.matches('[data-read="true"], [data-viewed="true"], .is-read, .has-read, .already-read')) return true;
+    const statusNodes = card.querySelectorAll([
+      '[data-qa-id*="read" i]',
+      '[data-qa-id*="viewed" i]',
+      '[aria-label*="已讀"]',
+      '[title*="已讀"]',
+      '[class*="read-status" i]',
+      '[class*="viewed-status" i]'
+    ].join(', '));
+    return [...statusNodes].some((node) => /^(?:已讀|已閱讀|已查看)$/.test(normalizeText(node.textContent || node.getAttribute("aria-label") || node.getAttribute("title"))));
   }
 
   function isResumeCodeLookupMode() {
@@ -928,8 +970,9 @@
   }
 
   function getSkipReason(card) {
+    const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
     return skipReasonFromSignals({
-      hasRemark: Boolean(card.querySelector(".resume-remark.mt-2, .resume-remark, [data-qa-id='resumeRemark']")),
+      isRead: isNativeReadCard(card) || openedResumeCodes.has(code),
       historyEntries: textsFromSelectors(card, [".history-list__collapse .list-txt"])
     });
   }
@@ -971,7 +1014,7 @@
       badge.className = "resume-screening-result-tag resume-screening-result-tag--skip";
       container.append(badge);
     }
-    badge.textContent = reason === "已有備註" ? "#已有備註" : `#近${MONTHS_TO_HIDE}個月已邀約`;
+    badge.textContent = reason === "履歷已讀" ? "#已讀" : `#近${MONTHS_TO_HIDE}個月已邀約`;
     badge.style.cssText += `;${tagBadgeStyle(badge.textContent)}`;
     setBadgeTooltip(badge, reason);
   }
@@ -1150,13 +1193,15 @@
   function extractCard(card) {
     const meta = extractCardMeta(card);
     const href = card.querySelector(PROFILE_LINK_SELECTOR)?.getAttribute("href") || "";
-    return { ...meta, resumeCode: extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id),
+    const resumeCode = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
+    return { ...meta, resumeCode,
       profileUrl: href ? new URL(href, location.origin).toString() : "",
       summary: getCardReadableText(card),
       education: textsFromSelectors(card, [EDUCATION_SELECTOR]).join(" "),
       militaryStatus: normalizeText(card.querySelector(MILITARY_SELECTOR)?.textContent),
       workExperience: normalizeText(card.querySelector(WORK_EXPERIENCE_SELECTOR)?.textContent),
       hasRemark: Boolean(card.querySelector(".resume-remark.mt-2")),
+      isRead: isNativeReadCard(card) || openedResumeCodes.has(resumeCode),
       historyEntries: textsFromSelectors(card, [".history-list__collapse .list-txt"]),
       detail: {status:"partial"}
     };
@@ -1863,7 +1908,7 @@
           insert: true,
           setParent: true
         });
-        openedResumeCodes.add(item.resumeCode);
+        rememberOpenedResumeCode(item.resumeCode);
         setSummary(`已開啟 ${index + 1}/${profiles.length} 個履歷分頁`);
         setProgress(Math.round(((index + 1) / profiles.length) * 100), `${index + 1}/${profiles.length}`);
         await sleep(180);
@@ -1895,7 +1940,7 @@
           insert: true,
           setParent: true
         });
-        openedResumeCodes.add(item.resumeCode);
+        rememberOpenedResumeCode(item.resumeCode);
         setSummary(`本批已開啟 ${index + 1}/${profiles.length} 筆高分履歷`);
         await sleep(180);
       }
@@ -1925,7 +1970,7 @@
     latestCardsByCode = new Map();
     latestScoreByCode = new Map();
     selectedResumeCodes = new Set();
-    openedResumeCodes = new Set();
+    openedResumeCodes = loadOpenedResumeCodes();
     isOpeningProfiles = false;
     currentResultFilter = "ranked";
     currentResultPage = 1;
@@ -1937,8 +1982,6 @@
     setProgress(2, "第 1/4 階段 · 準備收集（總完成 2%）");
 
     const cardsByCode = new Map();
-    let batch = 1;
-    let noGrowthRounds = 0;
 
     try {
       const roleId = inferRoleId();
@@ -1949,40 +1992,19 @@
       await loadSharedRules();
       if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
       else setStatus("共用規則已就緒，開始掃描卡片...");
-      setStageProgress(1, "收集履歷", 0, getTotalCount(), 5, 65);
+      const searchTotal = getTotalCount();
+      const currentPageTarget = Math.min(searchTotal || PAGE_SIZE, PAGE_SIZE);
+      setStageProgress(1, "收集履歷", 0, currentPageTarget, 5, 65);
       await waitForCards();
       await prepareScanPosition(cardsByCode);
-      const totalCount = getTotalCount();
-      const expectedPages = totalCount ? Math.ceil(totalCount / PAGE_SIZE) : 30;
-      if (totalCount && totalCount <= PAGE_SIZE) {
-        await scanSinglePage(cardsByCode, totalCount);
-      } else {
-        while (batch <= expectedPages + 3 && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
-          const beforeProcessed = processedCount(cardsByCode);
-          const beforeSignature = currentCodeSignature();
-          const progress = progressText(cardsByCode, totalCount);
-          setSummary(progress);
-          setStatus(`連續掃描中...${progress}`);
-          const stableResult = await scrollUntilStable(cardsByCode, totalCount);
-          if (stableResult?.timedOut) break;
-          if (targetReached(cardsByCode, totalCount)) break;
-          const autoGenerated = await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
-          if (!autoGenerated && !targetReached(cardsByCode, totalCount)) {
-            const hasNext = await goNextPage();
-            if (!hasNext) break;
-          }
-          if (processedCount(cardsByCode) <= beforeProcessed) noGrowthRounds += 1;
-          else noGrowthRounds = 0;
-          if (noGrowthRounds >= 2) break;
-          batch += 1;
-        }
-      }
-      setStatus(`最後確認頁尾是否還有延遲載入卡片...${progressText(cardsByCode, totalCount)}`);
-      await settleFinalBottom(cardsByCode, totalCount);
+      setStatus("只掃描目前頁面，正在載入本頁卡片...");
+      await scanSinglePage(cardsByCode, currentPageTarget);
+      setStatus(`最後確認本頁是否還有延遲載入卡片...${progressText(cardsByCode, currentPageTarget)}`);
+      await settleFinalBottom(cardsByCode, currentPageTarget);
       if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
 
       const cards = [...cardsByCode.values()];
-      setStatus(`初篩完成 ${cards.length} 筆，開始詳情補強...`);
+      setStatus(`初篩完成 ${cards.length} 筆，準備後端評分...`);
       const enrichment = await enrichResumeDetails(roleId, role, cards);
       if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
       if (enrichment.requested) {
@@ -2006,7 +2028,7 @@
         excludedReasonCounts: ranking.excludedReasonCounts
       });
       if (movedCards || hiddenExcludedCards) {
-        setStatus(`已重排目前頁 ${movedCards} 張卡片並隱藏 ${hiddenExcludedCards} 張硬排除卡片；跨頁結果請看右下角排名清單。`);
+          setStatus(`已重排目前頁 ${movedCards} 張卡片並隱藏 ${hiddenExcludedCards} 張硬排除卡片；完整本頁結果請看右下角排名清單。`);
       }
     } catch (error) {
       console.error(error);
