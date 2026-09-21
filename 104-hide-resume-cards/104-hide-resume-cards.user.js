@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.4.5
+// @version      5.0.0
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -189,7 +189,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v4.4.5</strong>
+          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.0</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;">待掃描</div>
@@ -210,7 +210,7 @@
           <option value="qa-engineer">軟體測試 QA</option>
           <option value="project-manager">專案經理 PM</option>
         </select>
-        <div data-screening-casting aria-live="polite" style="display:none;align-items:center;justify-content:center;min-height:36px;margin-bottom:8px;padding:0 8px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.navySoft};color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;text-align:center;">正在詠唱優秀篩選魔法 ヽ(́◕◞౪◟◕‵)ﾉ</div>
+        <div data-screening-casting aria-live="polite" style="display:none;align-items:center;justify-content:center;min-height:36px;margin-bottom:8px;padding:0 8px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.navySoft};color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;text-align:center;">正在詠唱篩選魔法 ヽ(́◕◞౪◟◕‵)ﾉ</div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
           <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
           <button data-screening-copy style="height:36px;border:1px solid ${UI.borderStrong};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;">開啟勾選</button>
