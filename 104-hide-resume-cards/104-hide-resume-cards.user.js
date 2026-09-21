@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.4.2
+// @version      4.4.3
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -20,6 +20,8 @@
   const CODE_SELECTOR = ".resume-card__center .supportInfo-wrap .code, .supportInfo-wrap .code";
   const PROFILE_LINK_SELECTOR = 'a.name[href], .user-photo a[href]';
   const NAME_SELECTOR = ".userInfo-wrap a.name, a.name.word-break-all";
+  const REMARK_SELECTOR = ".resume-remark.mt-2, .resume-remark, [data-qa-id='resumeRemark']";
+  const REMARK_TEXT_SELECTOR = ".resume-remark.mt-2 > span, .resume-remark > span, [data-qa-id='resumeRemark'] span";
   const EDUCATION_SELECTOR = '[data-qa-id="cardEducation"], #education-component > div > div > div.py-3';
   const MILITARY_SELECTOR = '#info-component > div.mode-browser.mode-locale-zhTW > div > div.add-on__wrapper > div > div > div > div > div > div > div:nth-child(1) > div.col.t3 > span:nth-child(3)';
   const PREFER_TITLE_SELECTORS = Object.freeze([
@@ -181,7 +183,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.4.2</strong>
+          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.4.3</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
@@ -994,10 +996,23 @@
   function getSkipReason(card) {
     const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id);
     return skipReasonFromSignals({
-      hasRemark: Boolean(card.querySelector(".resume-remark.mt-2, .resume-remark, [data-qa-id='resumeRemark']")),
+      hasRemark: Boolean(card.querySelector(REMARK_SELECTOR)),
       isRead: isNativeReadCard(card) || openedResumeCodes.has(code),
       historyEntries: textsFromSelectors(card, [".history-list__collapse .list-txt"])
     });
+  }
+
+  function remarkTextFromCard(card) {
+    if (!card) return "";
+    return normalizeText(card.querySelector(REMARK_TEXT_SELECTOR)?.textContent)
+      || normalizeText(card.querySelector(REMARK_SELECTOR)?.textContent);
+  }
+
+  function remarkSkipTooltip(card) {
+    const remarkText = remarkTextFromCard(card);
+    return remarkText
+      ? `備註內容：${remarkText}\n已跳過本次篩選，請人工二次檢核。`
+      : "此履歷具備註，已跳過本次篩選；請人工二次檢核。";
   }
 
   function processedCount(cardsByCode) {
@@ -1038,10 +1053,10 @@
       container.append(badge);
     }
     badge.textContent = reason === "已有備註"
-      ? "#已有備註"
+      ? "#具備註跳過篩選"
       : reason === "履歷已讀" ? "#已讀" : `#近${MONTHS_TO_HIDE}個月已邀約`;
     badge.style.cssText += `;${tagBadgeStyle(badge.textContent)}`;
-    setBadgeTooltip(badge, reason);
+    setBadgeTooltip(badge, reason === "已有備註" ? remarkSkipTooltip(card) : reason);
   }
 
   function rememberSkippedCard(card, reason) {
@@ -1225,7 +1240,8 @@
       education: textsFromSelectors(card, [EDUCATION_SELECTOR]).join(" "),
       militaryStatus: normalizeText(card.querySelector(MILITARY_SELECTOR)?.textContent),
       workExperience: normalizeText(card.querySelector(WORK_EXPERIENCE_SELECTOR)?.textContent),
-      hasRemark: Boolean(card.querySelector(".resume-remark.mt-2, .resume-remark, [data-qa-id='resumeRemark']")),
+      hasRemark: Boolean(card.querySelector(REMARK_SELECTOR)),
+      remarkText: remarkTextFromCard(card),
       isRead: isNativeReadCard(card) || openedResumeCodes.has(resumeCode),
       historyEntries: textsFromSelectors(card, [".history-list__collapse .list-txt"]),
       detail: {status:"partial"}
@@ -1432,7 +1448,7 @@
       badge.className = `resume-screening-result-tag resume-screening-result-tag--${resultTagTone(tag, item)}`;
       badge.textContent = tagKey(tag);
       badge.style.cssText += `;${tagBadgeStyle(tag)}`;
-      setBadgeTooltip(badge, tagTooltip(tag, item));
+      setBadgeTooltip(badge, tagTooltip(tag, item, card));
       container.append(badge);
     });
   }
@@ -1708,7 +1724,11 @@
     }).join("");
   }
 
-  function tagTooltip(tag, item) {
+  function tagTooltip(tag, item, card) {
+    if (tagKey(tag) === "#具備註跳過篩選") {
+      const cardRemarkText = remarkTextFromCard(card);
+      if (cardRemarkText) return `備註內容：${cardRemarkText}\n已跳過本次篩選，請人工二次檢核。`;
+    }
     const detail = item.displayTagDetails?.[tag] || item.displayTagDetails?.[tagKey(tag)] || "";
     if (detail) return detail;
     const matchedReason = (item.reasons || []).find((reason) => reason.includes(tag.replace(/^#/, "")));
@@ -2075,7 +2095,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip});
     return;
   }
 
