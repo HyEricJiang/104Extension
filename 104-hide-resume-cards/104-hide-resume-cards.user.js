@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      4.4.3
+// @version      4.4.4
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -106,6 +106,7 @@
     qualified: Object.freeze({ background: "#dcfce7", border: "#86efac", color: "#166534" }),
     unqualified: Object.freeze({ background: "#fdecec", border: "#efb5b5", color: "#9f2f18" })
   });
+  const TYPE_SCALE = Object.freeze({ title: 14, heading: 12, support: 10 });
 
   let isScanning = false;
   let panel;
@@ -119,6 +120,8 @@
   let summaryNode;
   let progressFillNode;
   let progressLabelNode;
+  let roleSelectNode;
+  let castingNode;
   let bodyNode;
   let headerNode;
   let shellNode;
@@ -183,20 +186,20 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:16px;">104 履歷掃描 v4.4.3</strong>
+          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v4.4.4</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
-        <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:13px;font-weight:700;">待掃描</div>
+        <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;">待掃描</div>
         <div style="margin-bottom:8px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;color:${UI.muted};font-size:11px;">
-            <span>共 4 個處理階段</span>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;color:${UI.muted};font-size:${TYPE_SCALE.support}px;">
+            <span data-screening-status aria-live="polite">準備就緒</span>
             <span data-screening-progress-label>0%</span>
           </div>
           <div style="height:8px;border-radius:999px;background:${UI.navySoft};overflow:hidden;border:1px solid ${UI.border};">
             <div data-screening-progress-fill style="width:0%;height:100%;border-radius:999px;background:${UI.navy};transition:width .22s ease;"></div>
           </div>
         </div>
-        <select data-role aria-label="搜尋職缺" style="width:100%;padding:8px;margin-bottom:8px;">
+        <select data-role aria-label="搜尋職缺" style="width:100%;padding:8px;margin-bottom:8px;font-size:${TYPE_SCALE.heading}px;font-weight:700;">
           <option value="">請選擇本次篩選職缺</option>
           <option value="java-programmer">Java 工程師</option>
           <option value="csharp-dotnet-programmer">C#/.NET 工程師</option>
@@ -204,12 +207,12 @@
           <option value="qa-engineer">軟體測試 QA</option>
           <option value="project-manager">專案經理 PM</option>
         </select>
-        <div data-screening-status style="margin-bottom:10px;color:${UI.muted};font-size:12px;">只掃描目前頁，跳過已有備註、已讀或 3 個月內已聯繫的人選</div>
+        <div data-screening-casting aria-live="polite" style="display:none;align-items:center;justify-content:center;min-height:36px;margin-bottom:8px;padding:0 8px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.navySoft};color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;text-align:center;">正在詠唱優秀篩選魔法 ヽ(́◕◞౪◟◕‵)ﾉ</div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
           <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
           <button data-screening-copy style="height:36px;border:1px solid ${UI.borderStrong};border-radius:8px;background:#fff;color:${UI.navy};font-weight:700;cursor:pointer;">開啟勾選</button>
         </div>
-        <button data-screening-quick-open disabled style="width:100%;height:36px;margin-bottom:10px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navySoft};color:${UI.navy};font-weight:800;cursor:pointer;">掃描後可開啟前 15 筆</button>
+        <button data-screening-quick-open disabled style="display:none;width:100%;height:36px;margin-bottom:10px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navySoft};color:${UI.navy};font-weight:800;cursor:pointer;">開啟未讀高分履歷</button>
         <div data-screening-body style="display:none;min-height:0;overflow:auto;padding-right:2px;">
           <div data-screening-results style="display:grid;gap:8px;"></div>
         </div>
@@ -223,6 +226,8 @@
     summaryNode = panel.querySelector("[data-screening-summary]");
     progressFillNode = panel.querySelector("[data-screening-progress-fill]");
     progressLabelNode = panel.querySelector("[data-screening-progress-label]");
+    roleSelectNode = panel.querySelector("[data-role]");
+    castingNode = panel.querySelector("[data-screening-casting]");
     startButton = panel.querySelector("[data-screening-start]");
     copyButton = panel.querySelector("[data-screening-copy]");
     quickOpenButton = panel.querySelector("[data-screening-quick-open]");
@@ -276,6 +281,13 @@
     const overallPercent = clamp(startPercent + ((endPercent - startPercent) * ratio), 0, 100);
     const countLabel = safeTotal ? `${Math.min(safeCompleted, safeTotal)}/${safeTotal}` : `${safeCompleted}/?`;
     setProgress(overallPercent, `第 ${stageIndex}/4 階段 · ${stageName} ${countLabel}（總完成 ${Math.round(overallPercent)}%）`);
+  }
+
+  function setRoleSelectionLocked(locked) {
+    if (!roleSelectNode || !castingNode) return;
+    roleSelectNode.disabled = locked;
+    roleSelectNode.style.display = locked ? "none" : "block";
+    castingNode.style.display = locked ? "flex" : "none";
   }
 
   function setCollapsed(nextCollapsed) {
@@ -967,7 +979,11 @@
   function restoreHiddenCards() {
     document.querySelectorAll("[data-resume-screening-skipped]").forEach((card) => {
       delete card.dataset.resumeScreeningSkipped;
+      delete card.dataset.resumeScreeningFilterKey;
       card.style.removeProperty("display");
+      card.style.removeProperty("visibility");
+      card.style.removeProperty("pointer-events");
+      card.removeAttribute("aria-hidden");
       card.querySelector("[data-resume-skip-badge]")?.remove();
     });
     skippedCards = new Map();
@@ -1030,7 +1046,9 @@
 
   function progressText(cardsByCode, totalCount) {
     if (!totalCount) return `可分析 ${cardsByCode.size}，跳過 ${skippedCards.size}`;
-    return `可分析 ${cardsByCode.size}/${targetScannableCount(totalCount)}，跳過 ${skippedCards.size}，原始 ${totalCount}`;
+    const scannableTarget = targetScannableCount(totalCount);
+    const analyzableCount = Math.min(cardsByCode.size, scannableTarget);
+    return `可分析 ${analyzableCount}/${scannableTarget}，跳過 ${Math.min(skippedCards.size, totalCount)}，原始 ${totalCount}`;
   }
 
   function progressPercent(cardsByCode, totalCount) {
@@ -1040,7 +1058,23 @@
 
   function hideSkippedCard(card, reason) {
     card.dataset.resumeScreeningSkipped = reason;
+    if (isScanning) {
+      card.style.removeProperty("display");
+      card.style.setProperty("visibility", "hidden", "important");
+      card.style.setProperty("pointer-events", "none", "important");
+      card.setAttribute("aria-hidden", "true");
+      return;
+    }
     card.style.setProperty("display", "none", "important");
+  }
+
+  function collapseSkippedCards() {
+    document.querySelectorAll("[data-resume-screening-skipped]").forEach((card) => {
+      card.style.removeProperty("visibility");
+      card.style.removeProperty("pointer-events");
+      card.style.setProperty("display", "none", "important");
+      card.setAttribute("aria-hidden", "true");
+    });
   }
 
   function renderSkipReasonBadge(card, reason) {
@@ -1395,13 +1429,16 @@
     return window.scrollY + window.innerHeight >= documentHeight() - tolerance;
   }
 
-  function collectVisibleCards(cardsByCode) {
+  function collectVisibleCards(cardsByCode, totalCount = 0) {
     filterResumeCards();
+    for (const skippedCode of skippedCards.keys()) cardsByCode.delete(skippedCode);
     const pageCards = [...document.querySelectorAll(CARD_SELECTOR)]
       .filter((card) => !card.dataset.resumeScreeningSkipped && getComputedStyle(card).display !== "none")
       .map(extractCard);
     for (const card of pageCards) {
-      if (card.resumeCode) cardsByCode.set(card.resumeCode, card);
+      if (!card.resumeCode) continue;
+      if (!cardsByCode.has(card.resumeCode) && totalCount && processedCount(cardsByCode) >= totalCount) continue;
+      cardsByCode.set(card.resumeCode, card);
     }
     return pageCards.length;
   }
@@ -1511,20 +1548,20 @@
   }
 
   function collectAndUpdateProgress(cardsByCode, totalCount) {
-    const count = collectVisibleCards(cardsByCode);
+    const count = collectVisibleCards(cardsByCode, totalCount);
     setSummary(progressText(cardsByCode, totalCount));
     setStageProgress(1, "收集履歷", processedCount(cardsByCode), totalCount, 5, 65);
     return count;
   }
 
-  async function prepareScanPosition(cardsByCode) {
+  async function prepareScanPosition(cardsByCode, totalCount) {
     filterResumeCards();
-    collectVisibleCards(cardsByCode);
+    collectVisibleCards(cardsByCode, totalCount);
     if (window.scrollY <= 40) return;
     setStatus("重新從頁首掃描，避免在頁尾空等...");
     window.scrollTo(0, 0);
     await sleep(900);
-    collectVisibleCards(cardsByCode);
+    collectVisibleCards(cardsByCode, totalCount);
   }
 
   async function fastScrollToBottom(cardsByCode, totalCount) {
@@ -1878,9 +1915,10 @@
     if (!quickOpenButton) return;
     const eligible = sortResultsByScore(latestAllResults).filter((item) => item.status !== "excluded" && item.profileUrl);
     const batch = nextUnreadHighScoreBatch(eligible, openedResumeCodes, 15);
+    quickOpenButton.style.display = !isScanning && batch.length ? "block" : "none";
     quickOpenButton.disabled = isOpeningProfiles || !batch.length;
     if (!batch.length) {
-      quickOpenButton.textContent = eligible.length ? "高分履歷已全部開啟" : "掃描後可開啟前 15 筆";
+      quickOpenButton.textContent = "開啟未讀高分履歷";
       return;
     }
     const firstRank = eligible.findIndex((item) => item.resumeCode === batch[0].resumeCode) + 1;
@@ -2007,7 +2045,8 @@
     startButton.style.background = UI.danger;
     startButton.style.borderColor = UI.danger;
     restoreExcludedCards();
-    skippedCards = new Map();
+    // 重新展開前一次已隱藏的卡片，掃描期間改以 visibility 保留佔位，避免 104 補載另一批履歷。
+    restoreHiddenCards();
     latestRanked = [];
     latestReviewRequired = [];
     latestExcluded = [];
@@ -2034,6 +2073,7 @@
       if (!role) {
         throw new Error("請先在面板選擇要篩選的職缺，再開始掃描。");
       }
+      setRoleSelectionLocked(true);
       await loadSharedRules();
       if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
       else setStatus("共用規則已就緒，開始掃描卡片...");
@@ -2041,13 +2081,15 @@
       const currentPageTarget = Math.min(searchTotal || PAGE_SIZE, PAGE_SIZE);
       setStageProgress(1, "收集履歷", 0, currentPageTarget, 5, 65);
       await waitForCards();
-      await prepareScanPosition(cardsByCode);
+      await prepareScanPosition(cardsByCode, currentPageTarget);
       setStatus("只掃描目前頁面，正在載入本頁卡片...");
       await scanSinglePage(cardsByCode, currentPageTarget);
       setStatus(`最後確認本頁是否還有延遲載入卡片...${progressText(cardsByCode, currentPageTarget)}`);
       await settleFinalBottom(cardsByCode, currentPageTarget);
       if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
 
+      for (const skippedCode of skippedCards.keys()) cardsByCode.delete(skippedCode);
+      collapseSkippedCards();
       const cards = [...cardsByCode.values()];
       setStatus(`初篩完成 ${cards.length} 筆，準備後端評分...`);
       const enrichment = await enrichResumeDetails(roleId, role, cards);
@@ -2091,6 +2133,9 @@
       startButton.textContent = "掃描並依分數排序";
       startButton.style.background = UI.navy;
       startButton.style.borderColor = UI.navy;
+      setRoleSelectionLocked(false);
+      collapseSkippedCards();
+      updateQuickOpenButton();
     }
   }
 
