@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      5.0.2
+// @version      5.0.3
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -106,7 +106,8 @@
     accentBg: "#f3eefb",
     summaryRecommend: "#166534",
     summaryReview: "#8a5a00",
-    summaryFiltered: "#991b1b"
+    summaryFiltered: "#991b1b",
+    summarySkipped: "#5b4b8a"
   });
   const TAG_COLOR = Object.freeze({ background: "#eef9f8", border: "#a9d9d7", color: "#246f72" });
   const SCORE_COLORS = Object.freeze({
@@ -136,6 +137,7 @@
   let latestRanked = [];
   let latestReviewRequired = [];
   let latestExcluded = [];
+  let latestSkipped = [];
   let latestAllResults = [];
   let selectedResumeCodes = new Set();
   let openedResumeCodes = loadOpenedResumeCodes();
@@ -276,12 +278,13 @@
     summaryNode.style.display = "block";
   }
 
-  function renderCompletionSummary(recommendedCount, reviewCount, filteredCount) {
+  function renderCompletionSummary(recommendedCount, reviewCount, excludedCount, skippedCount) {
     mountPanel();
     const items = [
       { label: "推薦", count: recommendedCount, color: UI.summaryRecommend },
       { label: "人工審核", count: reviewCount, color: UI.summaryReview },
-      { label: "篩選", count: filteredCount, color: UI.summaryFiltered }
+      { label: "排除", count: excludedCount, color: UI.summaryFiltered },
+      { label: "跳過", count: skippedCount, color: UI.summarySkipped }
     ];
     summaryNode.setAttribute("aria-label", items.map((item) => `${item.label} ${item.count} 筆`).join("，"));
     summaryNode.innerHTML = items.map((item) => `
@@ -290,7 +293,7 @@
       </span>
     `).join("");
     summaryNode.style.display = "grid";
-    summaryNode.style.gridTemplateColumns = "repeat(3,minmax(0,1fr))";
+    summaryNode.style.gridTemplateColumns = "repeat(4,minmax(0,1fr))";
     summaryNode.style.gap = "6px";
   }
 
@@ -1447,13 +1450,15 @@
       ranked: sortResultsByScore(groups.ranked),
       review: sortResultsByScore(groups.review),
       excluded: sortResultsByScore(groups.excluded),
+      skipped: sortResultsByScore(groups.skipped),
       all: sortResultsByScore(groups.all)
     };
   }
 
   function mergeScoredAndSkippedResults(ranking, skippedResults) {
     return {
-      excluded: sortResultsByScore([...(ranking?.excluded || []), ...(skippedResults || [])]),
+      excluded: sortResultsByScore(ranking?.excluded || []),
+      skipped: sortResultsByScore(skippedResults || []),
       all: sortResultsByScore([...(ranking?.allResults || []), ...(skippedResults || [])])
     };
   }
@@ -1769,6 +1774,7 @@
       ranked: latestRanked,
       review: latestReviewRequired,
       excluded: latestExcluded,
+      skipped: latestSkipped,
       all: latestAllResults
     });
   }
@@ -1778,6 +1784,7 @@
       ranked: "推薦",
       review: "人工覆核",
       excluded: "排除",
+      skipped: "跳過",
       all: "全部"
     }[filter] || "推薦";
   }
@@ -1797,7 +1804,14 @@
 
   function renderFilterButton(filter, count) {
     const active = currentResultFilter === filter;
-    return `<button data-result-filter="${filter}" style="height:30px;border:1px solid ${active ? UI.navy : UI.border};border-radius:8px;background:${active ? UI.navy : UI.surface};color:${active ? "#fff" : UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">${resultFilterLabel(filter)} ${count}</button>`;
+    const activeColor = {
+      ranked: UI.summaryRecommend,
+      review: UI.summaryReview,
+      excluded: UI.summaryFiltered,
+      skipped: UI.summarySkipped,
+      all: UI.navy
+    }[filter] || UI.navy;
+    return `<button data-result-filter="${filter}" aria-pressed="${active}" aria-label="顯示${resultFilterLabel(filter)}履歷，共 ${count} 筆" style="min-height:34px;border:1px solid ${active ? activeColor : UI.border};border-radius:8px;background:${active ? activeColor : UI.surface};color:${active ? "#fff" : UI.navy};font-weight:700;cursor:pointer;padding:4px 10px;white-space:nowrap;">${resultFilterLabel(filter)} ${count}</button>`;
   }
 
   function renderSelectionButton(action, label) {
@@ -2013,11 +2027,12 @@
         ${renderFilterButton("ranked", latestRanked.length)}
         ${renderFilterButton("review", latestReviewRequired.length)}
         ${renderFilterButton("excluded", latestExcluded.length)}
+        ${renderFilterButton("skipped", latestSkipped.length)}
         ${renderFilterButton("all", latestAllResults.length)}
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
         ${renderSelectionButton("toggle-page", isVisiblePageFullySelected() ? "取消本頁全選" : "本頁全選")}
-        ${latestExcluded.some((item) => !item.skippedBeforeScoring) ? `<button data-restore-excluded style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">還原後端排除卡片</button>` : ""}
+        ${latestExcluded.length ? `<button data-restore-excluded style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">還原後端排除卡片</button>` : ""}
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:${UI.muted};font-size:14px;">
         <span>${resultFilterLabel(currentResultFilter)}第 ${currentResultPage}/${totalPages} 頁，每頁 ${RANKED_LIST_PAGE_SIZE} 筆</span>
@@ -2031,7 +2046,7 @@
     `;
     attachResultEvents();
     updateOpenButtonLabel();
-    renderCompletionSummary(latestRanked.length, latestReviewRequired.length, latestExcluded.length);
+    renderCompletionSummary(latestRanked.length, latestReviewRequired.length, latestExcluded.length, latestSkipped.length);
     setProgress(100, "第 4/4 階段 · 排序呈現完成（總完成 100%）");
     const shortageNote = latestRanked.length
       ? `已依分數排序；可勾選後開啟履歷。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
@@ -2040,7 +2055,7 @@
   }
 
   function escapeHtml(value) {
-    return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
   }
 
   async function openRankedProfiles() {
@@ -2120,6 +2135,7 @@
     latestRanked = [];
     latestReviewRequired = [];
     latestExcluded = [];
+    latestSkipped = [];
     latestAllResults = [];
     latestCardsByCode = new Map();
     latestScoreByCode = new Map();
@@ -2207,6 +2223,7 @@
         allResults: applyCardElementAvailability(ranking.allResults)
       }, skippedResults);
       latestExcluded = mergedResults.excluded;
+      latestSkipped = mergedResults.skipped;
       latestAllResults = mergedResults.all;
       latestCardsByCode = cardsByCode;
       renderResults({
@@ -2240,7 +2257,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
     return;
   }
 
