@@ -1720,15 +1720,6 @@
     return false;
   }
 
-  async function scanSinglePage(cardsByCode, totalCount) {
-    setStatus(`單頁掃描中...${progressText(cardsByCode, totalCount)}`);
-    collectAndUpdateProgress(cardsByCode, totalCount);
-    await fastScrollToBottom(cardsByCode, totalCount);
-    await sleep(500);
-    collectAndUpdateProgress(cardsByCode, totalCount);
-    setSummary(progressText(cardsByCode, totalCount));
-  }
-
   function resultGroups() {
     return buildSortedResultGroups({
       ranked: latestRanked,
@@ -2170,7 +2161,7 @@
         excludedReasonCounts: ranking.excludedReasonCounts
       });
       if (movedCards || hiddenExcludedCards) {
-          setStatus(`已重排目前頁 ${movedCards} 張卡片並隱藏 ${hiddenExcludedCards} 張硬排除卡片；完整本頁結果請看右下角排名清單。`);
+          setStatus(`已重排畫面上 ${movedCards} 張卡片並隱藏 ${hiddenExcludedCards} 張硬排除卡片；完整搜尋結果請看右下角排名清單。`);
       }
     } catch (error) {
       console.error(error);
