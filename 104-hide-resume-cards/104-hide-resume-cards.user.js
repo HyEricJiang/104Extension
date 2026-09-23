@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      5.0.1
+// @version      5.0.2
 // @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -1058,6 +1058,43 @@
       : "此履歷具備註，已跳過本次篩選；請人工二次檢核。";
   }
 
+  function skipPresentation(reason, remarkText = "") {
+    if (reason === "已有備註") {
+      const detail = remarkText
+        ? `備註內容：${normalizeText(remarkText)}\n已跳過本次篩選，請人工二次檢核。`
+        : "此履歷具備註，已跳過本次篩選；請人工二次檢核。";
+      return { tag: "#具備註跳過篩選", detail };
+    }
+    if (reason === "履歷已讀") {
+      return { tag: "#已讀跳過篩選", detail: "此履歷已由 104 標示為已讀，或曾由本工具開啟，因此未重複送入後端評分。" };
+    }
+    return { tag: `#近${MONTHS_TO_HIDE}個月已邀約`, detail: `${reason}，因此未重複送入後端評分。` };
+  }
+
+  function skippedResultFromCard(card, reason) {
+    const extracted = extractCard(card);
+    const presentation = skipPresentation(reason, extracted.remarkText);
+    return {
+      ...extracted,
+      status: "excluded",
+      score: null,
+      rankTier: 99,
+      reasons: [presentation.detail],
+      displayTags: [presentation.tag],
+      displayTagDetails: { [presentation.tag]: presentation.detail },
+      scoreBreakdown: [],
+      scoreExplanation: presentation.detail,
+      skippedBeforeScoring: true,
+      skipReason: reason
+    };
+  }
+
+  function skippedResultItems() {
+    return [...skippedCards.values()]
+      .map((entry) => entry?.resultItem)
+      .filter(Boolean);
+  }
+
   function processedCount(cardsByCode) {
     return cardsByCode.size + skippedCards.size;
   }
@@ -1122,7 +1159,7 @@
 
   function rememberSkippedCard(card, reason) {
     const code = extractResumeCode(card.querySelector(CODE_SELECTOR)?.textContent || card.id) || card.id;
-    if (code) skippedCards.set(code, reason);
+    if (code) skippedCards.set(code, { reason, resultItem: skippedResultFromCard(card, reason) });
   }
 
   function isScreeningOwnedElement(element) {
@@ -1411,6 +1448,13 @@
       review: sortResultsByScore(groups.review),
       excluded: sortResultsByScore(groups.excluded),
       all: sortResultsByScore(groups.all)
+    };
+  }
+
+  function mergeScoredAndSkippedResults(ranking, skippedResults) {
+    return {
+      excluded: sortResultsByScore([...(ranking?.excluded || []), ...(skippedResults || [])]),
+      all: sortResultsByScore([...(ranking?.allResults || []), ...(skippedResults || [])])
     };
   }
 
@@ -1794,6 +1838,12 @@
   }
 
   function renderScoreBreakdown(item) {
+    if (item.skippedBeforeScoring) {
+      return `<details data-score-details style="margin-top:8px;color:${UI.ink};font-size:14px;cursor:default;">
+        <summary style="cursor:pointer;min-height:28px;line-height:28px;color:${UI.navy};font-weight:700;">查看跳過原因</summary>
+        <div style="padding:6px 0;line-height:1.5;white-space:pre-line;">${escapeHtml(item.scoreExplanation || item.skipReason || "前端跳過")}</div>
+      </details>`;
+    }
     const rows = Array.isArray(item.scoreBreakdown) ? item.scoreBreakdown : [];
     return `<details data-score-details style="margin-top:8px;color:${UI.ink};font-size:14px;cursor:default;">
       <summary style="cursor:pointer;min-height:28px;line-height:28px;color:${UI.navy};font-weight:700;">查看加扣分明細（唯讀）</summary>
@@ -1811,7 +1861,8 @@
     const disabled = item.profileUrl ? "" : "disabled";
     const displayTags = (item.displayTags && item.displayTags.length ? item.displayTags : (item.reasons || []).map((reason) => `#${reasonTagLabel(reason)}`)).slice(0, 9);
     const displayName = normalizeText(item.candidateName) || `候選人 ${absoluteIndex}`;
-    const scoreDetail = scoreTooltip(item);
+    const scoreDetail = item.skippedBeforeScoring ? "前端跳過，未送入後端計分" : scoreTooltip(item);
+    const scoreLabel = item.skippedBeforeScoring ? "跳過" : item.score;
     return `
       <article data-result-item="${escapeHtml(item.resumeCode)}" style="border:1px solid ${UI.border};border-radius:8px;background:${UI.surface};padding:10px 10px 9px;cursor:${item.profileUrl ? "pointer" : "default"};box-shadow:0 1px 2px rgba(15,39,66,.04);" title="${item.profileUrl ? "點擊卡片可切換勾選" : ""}">
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:start;">
@@ -1827,7 +1878,7 @@
               ${displayTags.map((tag) => `<span data-resume-tag-tooltip="${escapeHtml(tagTooltip(tag, item))}" tabindex="0" aria-label="${escapeHtml(`${tag}：${tagTooltip(tag, item)}`)}" style="border-radius:999px;padding:1px 7px;font-size:13px;font-weight:700;${tagBadgeStyle(tag)}">${escapeHtml(tag)}</span>`).join("")}
             </div>
           </div>
-          <strong data-resume-tag-tooltip="${escapeHtml(scoreDetail)}" tabindex="0" aria-label="${escapeHtml(scoreDetail)}" style="${scoreBadgeStyle(item)}">${item.score}</strong>
+          <strong data-resume-tag-tooltip="${escapeHtml(scoreDetail)}" tabindex="0" aria-label="${escapeHtml(scoreDetail)}" style="${scoreBadgeStyle(item)}">${escapeHtml(scoreLabel)}</strong>
         </div>
       </article>
     `;
@@ -1948,8 +1999,6 @@
   }
 
   function renderResults(scanStats) {
-    const scannedCount = scanStats?.scannedCount || latestAllResults.length;
-    const excludedCount = scanStats?.excludedCount ?? latestExcluded.length;
     const excludedReasonCounts = scanStats?.excludedReasonCounts || {};
     const excludedReasonSummary = Object.entries(excludedReasonCounts)
       .sort((a, b) => b[1] - a[1])
@@ -1968,7 +2017,7 @@
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
         ${renderSelectionButton("toggle-page", isVisiblePageFullySelected() ? "取消本頁全選" : "本頁全選")}
-        ${latestExcluded.length ? `<button data-restore-excluded style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">還原排除卡片</button>` : ""}
+        ${latestExcluded.some((item) => !item.skippedBeforeScoring) ? `<button data-restore-excluded style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">還原後端排除卡片</button>` : ""}
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:${UI.muted};font-size:14px;">
         <span>${resultFilterLabel(currentResultFilter)}第 ${currentResultPage}/${totalPages} 頁，每頁 ${RANKED_LIST_PAGE_SIZE} 筆</span>
@@ -1982,7 +2031,7 @@
     `;
     attachResultEvents();
     updateOpenButtonLabel();
-    renderCompletionSummary(latestRanked.length, latestReviewRequired.length, excludedCount + skippedCards.size);
+    renderCompletionSummary(latestRanked.length, latestReviewRequired.length, latestExcluded.length);
     setProgress(100, "第 4/4 階段 · 排序呈現完成（總完成 100%）");
     const shortageNote = latestRanked.length
       ? `已依分數排序；可勾選後開啟履歷。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
@@ -2152,12 +2201,15 @@
       const hiddenExcludedCards = hideExcludedCards(scoredItems);
       latestRanked = sortResultsByScore(applyCardElementAvailability(ranking.ranked));
       latestReviewRequired = sortResultsByScore(applyCardElementAvailability(ranking.reviewRequired));
-      latestExcluded = sortResultsByScore(applyCardElementAvailability(ranking.excluded));
-      latestAllResults = sortResultsByScore(applyCardElementAvailability(ranking.allResults));
+      const skippedResults = applyCardElementAvailability(skippedResultItems());
+      const mergedResults = mergeScoredAndSkippedResults({
+        excluded: applyCardElementAvailability(ranking.excluded),
+        allResults: applyCardElementAvailability(ranking.allResults)
+      }, skippedResults);
+      latestExcluded = mergedResults.excluded;
+      latestAllResults = mergedResults.all;
       latestCardsByCode = cardsByCode;
       renderResults({
-        scannedCount: cards.length,
-        excludedCount: ranking.excludedCount,
         excludedReasonCounts: ranking.excludedReasonCounts
       });
       if (movedCards || hiddenExcludedCards) {
@@ -2188,7 +2240,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip});
     return;
   }
 
