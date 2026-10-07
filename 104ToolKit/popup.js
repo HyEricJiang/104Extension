@@ -27,6 +27,79 @@ const ui = {
 
 let groupInfo = { hasGroup: false, title: "" };
 let workflowRunning = false;
+let jobsRunning = false;
+let classificationBusy = false;
+let canClassify = false;
+
+function updateClassificationAvailability() {
+  document.querySelectorAll(".classification-button").forEach(button => {
+    button.disabled = classificationBusy || jobsRunning || !canClassify;
+  });
+}
+
+function selectMode(mode) {
+  const tag = mode === "tag";
+  byId("tagTab").setAttribute("aria-selected", String(tag));
+  byId("dataTab").setAttribute("aria-selected", String(!tag));
+  byId("tagTab").tabIndex = tag ? 0 : -1;
+  byId("dataTab").tabIndex = tag ? -1 : 0;
+  byId("tagWorkflow").hidden = !tag;
+  byId("dataWorkflow").hidden = tag;
+}
+
+async function refreshClassification() {
+  const result = await sendClassification({ type: "TOOLKIT_GET_CLASSIFIER_STATE" });
+  if (!result?.ok) throw new Error(result?.error || "無法讀取分類。");
+  canClassify = result.canClassify;
+  byId("classificationGroup").textContent = result.groupTitle || "尚未分類";
+  groupInfo = { hasGroup: Boolean(result.groupTitle), title: result.groupTitle || "" };
+  const actions = byId("classificationActions");
+  actions.querySelectorAll("button").forEach(button => {
+    button.setAttribute("aria-pressed", String(button.textContent === result.groupTitle));
+  });
+  if (!canClassify) byId("classificationStatus").textContent = "請先切換到 104 VIP 履歷頁再下標籤。";
+  updateClassificationAvailability();
+  buildPreviewFilename();
+}
+
+async function classifyCurrent(categoryId) {
+  classificationBusy = true;
+  updateClassificationAvailability();
+  byId("classificationStatus").textContent = "正在更新目前分頁群組…";
+  try {
+    const result = await sendClassification({ type: "CLASSIFY_CURRENT_TAB", categoryId });
+    if (!result?.ok) throw new Error(result?.error || "分類失敗。");
+    await refreshClassification();
+    byId("classificationStatus").textContent = `已加入「${result.groupTitle}」群組。`;
+  } catch (error) {
+    byId("classificationStatus").textContent = `分類失敗：${errorText(error)}`;
+  } finally {
+    classificationBusy = false;
+    updateClassificationAvailability();
+  }
+}
+
+// 每次請求使用獨立分類連線，並明確處理未載入、斷線與逾時。
+function sendClassification(message) {
+  return new Promise((resolve, reject) => {
+    const port = chrome.runtime.connect({ name: "toolkit-classifier" });
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error("分類服務回覆逾時，請重新載入擴充功能後再試。")), 8000);
+    function finish(error, result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      port.disconnect();
+      if (error) reject(error); else resolve(result);
+    }
+    port.onMessage.addListener(result => finish(null, result));
+    port.onDisconnect.addListener(() => {
+      const detail = chrome.runtime.lastError?.message;
+      finish(new Error(detail ? `分類服務連線失敗：${detail}。請重新載入擴充功能。` : "分類服務未連線，請在 chrome://extensions 重新載入 104 招募工作台。"));
+    });
+    try { port.postMessage(message); } catch (error) { finish(error); }
+  });
+}
 
 async function send(message) {
   return chrome.runtime.sendMessage(message);
@@ -137,6 +210,8 @@ async function refreshStates() {
     const workflowState = workflow?.state || {};
     const copyState = copy?.state || {};
     const pdfState = pdf || {};
+    jobsRunning = Boolean(workflowState.running || copyState.running || pdfState.running);
+    updateClassificationAvailability();
     if (workflow?.ok) renderWorkflow(workflowState);
     if (copy?.ok) renderCopy(copyState);
     if (pdf) renderPdf(pdfState);
@@ -212,6 +287,20 @@ async function startPdf(cmd) {
 }
 
 function bindActions() {
+  document.querySelectorAll(".classification-button").forEach(button => {
+    button.addEventListener("click", () => classifyCurrent(button.dataset.category));
+  });
+  byId("tagTab").addEventListener("click", () => selectMode("tag"));
+  byId("dataTab").addEventListener("click", () => selectMode("data"));
+  ["tagTab", "dataTab"].forEach((id) => {
+    byId(id).addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === "Home" ? "tag" : event.key === "End" ? "data" : id === "tagTab" ? "data" : "tag";
+      selectMode(next);
+      byId(next === "tag" ? "tagTab" : "dataTab").focus();
+    });
+  });
   ui.toggleCopyPanel.addEventListener("click", () => togglePanel("copyPanel"));
   ui.toggleExportPanel.addEventListener("click", () => togglePanel("exportPanel"));
   ui.startWorkflow.addEventListener("click", async () => {
@@ -260,7 +349,14 @@ chrome.runtime.onMessage.addListener((message) => {
 document.addEventListener("DOMContentLoaded", async () => {
   setExpandedPanel(null);
   bindActions();
-  await loadSettings();
   await refreshStates();
+  try {
+    await loadSettings();
+    await refreshClassification();
+    if (canClassify) byId("classificationStatus").textContent = "選擇分類即可為目前分頁下標籤。";
+  } catch (error) {
+    byId("classificationStatus").textContent = `初始化失敗：${errorText(error)}`;
+    updateClassificationAvailability();
+  }
   setInterval(refreshStates, 900);
 });

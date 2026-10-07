@@ -172,6 +172,8 @@
     return true;
   });
 
+  globalThis.RecruitingWorkflow = Object.freeze({ getState: publicState });
+
   restoreInitialState().catch((error) => {
     console.error("[104 招募工作台] 無法還原工作流狀態", error);
   });

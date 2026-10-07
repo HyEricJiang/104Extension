@@ -12,11 +12,28 @@
       <div>
         <p class="eyebrow">104 RECRUITING TOOLKIT</p>
         <h1>招募工作台</h1>
-        <p class="header-copy">先確認匯出格式，再選擇要執行的工作。</p>
+        <p class="header-copy">分類履歷，再整理聯絡資料與匯出 PDF。</p>
       </div>
       <span id="globalStatus" class="status-badge status-idle">待命</span>
     </header>
 
+    <div class="mode-tabs" role="tablist" aria-label="工作模式">
+      <button id="tagTab" class="mode-tab" type="button" role="tab" aria-selected="true" aria-controls="tagWorkflow">下標籤</button>
+      <button id="dataTab" class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="dataWorkflow" tabindex="-1">複製與匯出</button>
+    </div>
+    <section id="tagWorkflow" role="tabpanel" aria-labelledby="tagTab">
+      <div class="workflow-card">
+        <div class="section-heading"><h2>選擇履歷分類</h2><span id="classificationGroup" class="scope-badge">尚未分類</span></div>
+        <p class="section-copy">將目前分頁加入同名 Chrome 分頁群組。</p>
+        <div id="classificationActions" class="classification-actions">
+          <button type="button" class="classification-button" data-category="recommendedUnsuitable" aria-pressed="false" disabled>推薦但不合適</button>
+          <button type="button" class="classification-button" data-category="reviewedSuitable" aria-pressed="false" disabled>人工審核但合適</button>
+          <button type="button" class="classification-button" data-category="excludedRecommended" aria-pressed="false" disabled>排除但推薦</button>
+        </div>
+        <p id="classificationStatus" class="status-message" aria-live="polite">正在讀取目前分頁…</p>
+      </div>
+    </section>
+    <section id="dataWorkflow" role="tabpanel" aria-labelledby="dataTab" hidden>
     <section class="settings-card" aria-labelledby="settingsTitle">
       <div class="section-heading">
         <div>
@@ -135,6 +152,8 @@
         <button id="stopPdf" class="button button-danger button-block" disabled>停止 PDF 匯出</button>
         <div id="pdfStatus" class="detail-status" aria-live="polite">將使用上方的 PDF 匯出設定。</div>
       </section>
+    </section>
+
     </section>
 
     <footer>只會在 vip.104.com.tw 執行；個資不會傳送到外部服務。</footer>

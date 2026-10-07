@@ -204,3 +204,15 @@ input, select {
 .preview strong { overflow-wrap: anywhere; color: var(--ui-navy); font-size: 12px; }
 
 footer { padding: 12px 4px 0; color: var(--ui-muted); text-align: center; font-size: 10px; line-height: 1.5; }
+
+/* 雙分頁模式保留既有匯出工作台的設定與操作。 */
+[hidden] { display: none !important; }
+.mode-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--ui-border); margin-bottom: 16px; }
+.mode-tab { flex: 1; min-height: 44px; border: 0; border-bottom: 3px solid transparent; padding: 10px; background: transparent; color: var(--ui-muted); cursor: pointer; font-weight: 700; }
+.mode-tab[aria-selected="true"] { border-bottom-color: var(--ui-navy); color: var(--ui-navy); }
+.classification-actions { display: grid; gap: 10px; margin: 16px 0; }
+.classification-button { min-height: 48px; padding: 12px 14px; text-align: left; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius); background: var(--ui-surface); color: var(--ui-ink); cursor: pointer; font-weight: 700; }
+.classification-button[data-category="excludedRecommended"] { background: var(--ui-page); }
+.classification-button[aria-pressed="true"] { outline: 2px solid var(--ui-navy); outline-offset: 1px; }
+.classification-button:disabled { opacity: .55; cursor: default; }
+#classificationGroup { white-space: normal; text-align: center; max-width: 160px; }
