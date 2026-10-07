@@ -126,3 +126,41 @@ test("快速分類同一視窗會共用新建群組", async () => {
   await Promise.all([classifyTab({ id: 1, windowId: 9 }, "excludedRecommended"), classifyTab({ id: 2, windowId: 9 }, "excludedRecommended")]);
   assert.equal(creates, 1);
 });
+
+test("八個職缺使用固定選單，不接受任意群組名稱", () => {
+  assert.deepEqual(CONFIG.jobGroups, ["Jr.Net PG", "Sr.Net PG", "Jr.Java PG", "Sr.Java PG", "Jr.QA", "Sr.QA", "SA", "PM"]);
+});
+
+test("職缺分組可處理目前網頁，加入既有群組並保留原顏色", async () => {
+  const calls=[];
+  chrome.tabs.query=async()=>[{id:27,windowId:8,groupId:-1,url:"https://example.com/job"}];
+  chrome.tabGroups.query=async()=>[{id:65,title:"Jr.Java PG",color:"red"}];
+  chrome.tabs.group=async options=>{calls.push(options);return 65;};
+  chrome.tabGroups.update=async()=>{throw Error("不可改動既有群組外觀");};
+  global.RecruitingCollector={getState:async()=>({running:false})};
+  global.RecruitingPdfExporter={getState:()=>({running:false})};
+  global.RecruitingWorkflow={getState:()=>({running:false})};
+  const result=await handleMessage({type:"TOOLKIT_GROUP_JOB_TAB",groupTitle:"Jr.Java PG"});
+  assert.equal(result.ok,true);
+  assert.equal(result.created,false);
+  assert.deepEqual(calls,[{groupId:65,tabIds:27}]);
+});
+
+test("不存在的職缺群組會建立並加入目前分頁", async()=>{
+  const calls=[];
+  chrome.tabGroups.query=async()=>[];
+  chrome.tabs.group=async options=>{calls.push(options);return 70;};
+  chrome.tabGroups.update=async(id,changes)=>calls.push({id,...changes});
+  const result=await handleMessage({type:"TOOLKIT_GROUP_JOB_TAB",groupTitle:"SA"});
+  assert.equal(result.created,true);
+  assert.deepEqual(calls,[{createProperties:{windowId:8},tabIds:27},{id:70,title:"SA",color:"grey",collapsed:false}]);
+});
+
+test("職缺分組拒絕未知名稱、瀏覽器內部頁面與執行中工作",async()=>{
+  await assert.rejects(handleMessage({type:"TOOLKIT_GROUP_JOB_TAB",groupTitle:"unknown"}),/有效的職缺/);
+  chrome.tabs.query=async()=>[{id:27,windowId:8,url:"chrome://extensions"}];
+  await assert.rejects(handleMessage({type:"TOOLKIT_GROUP_JOB_TAB",groupTitle:"PM"}),/切換到/);
+  chrome.tabs.query=async()=>[{id:27,windowId:8,url:"https://example.com/"}];
+  global.RecruitingWorkflow={getState:()=>({running:true})};
+  await assert.rejects(handleMessage({type:"TOOLKIT_GROUP_JOB_TAB",groupTitle:"PM"}),/等待目前/);
+});

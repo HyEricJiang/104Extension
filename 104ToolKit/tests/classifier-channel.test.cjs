@@ -96,3 +96,10 @@ test('分類服務未載入時，提示重新載入擴充功能',async()=>{
 test('分類服務沒有回覆時，會逾時並顯示可操作提示',async()=>{
   await assert.rejects(popupRequest({timeout:true}),/逾時/);
 });
+
+test('職缺分組訊息透過完整背景服務的專用連線執行',async()=>{
+  const result=await request(loadWorker(),{type:'TOOLKIT_GROUP_JOB_TAB',groupTitle:'Sr.QA'});
+  assert.equal(result.ok,true);
+  assert.equal(result.groupTitle,'Sr.QA');
+  assert.equal(result.created,true);
+});

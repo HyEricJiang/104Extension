@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "104 招募工作台",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "下標籤、複製聯絡資料與匯出履歷 PDF 的雙分頁招募工作台。",
   "permissions": [
     "tabs",

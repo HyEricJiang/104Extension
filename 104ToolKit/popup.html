@@ -34,6 +34,16 @@
       </div>
     </section>
     <section id="dataWorkflow" role="tabpanel" aria-labelledby="dataTab" hidden>
+      <section class="workflow-card" aria-labelledby="jobGroupTitle">
+        <div class="section-heading"><h2 id="jobGroupTitle">加入職缺群組</h2><span id="jobCurrentGroup" class="scope-badge">尚未分類</span></div>
+        <p class="section-copy">只移動目前網頁；加入後會移出原群組。</p>
+        <label class="field" for="jobGroupSelect">選擇目前招募的職缺</label>
+        <div class="job-group-controls">
+          <select id="jobGroupSelect" disabled aria-describedby="jobGroupStatus"><option value="">請選擇職缺</option></select>
+          <button id="addJobGroup" type="button" class="button button-primary" disabled>加入群組</button>
+        </div>
+        <p id="jobGroupStatus" class="status-message" aria-live="polite">正在讀取職缺群組…</p>
+      </section>
     <section class="settings-card" aria-labelledby="settingsTitle">
       <div class="section-heading">
         <div>

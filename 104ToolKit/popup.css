@@ -216,3 +216,7 @@ footer { padding: 12px 4px 0; color: var(--ui-muted); text-align: center; font-s
 .classification-button[aria-pressed="true"] { outline: 2px solid var(--ui-navy); outline-offset: 1px; }
 .classification-button:disabled { opacity: .55; cursor: default; }
 #classificationGroup { white-space: normal; text-align: center; max-width: 160px; }
+
+.job-group-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 8px 0 12px; }
+.job-group-controls select { min-height: 44px; }
+#jobCurrentGroup { max-width: 150px; white-space: normal; overflow-wrap: anywhere; }

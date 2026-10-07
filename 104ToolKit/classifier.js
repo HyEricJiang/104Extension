@@ -7,6 +7,7 @@
 
 const CONFIG = Object.freeze({
   messageType: "CLASSIFY_CURRENT_TAB",
+  jobGroups: Object.freeze(["Jr.Net PG", "Sr.Net PG", "Jr.Java PG", "Sr.Java PG", "Jr.QA", "Sr.QA", "SA", "PM"]),
   groups: Object.freeze({
     recommendedUnsuitable: Object.freeze({ title: "推薦但不合適", color: "yellow" }),
     reviewedSuitable: Object.freeze({ title: "人工審核但合適", color: "blue" }),
@@ -51,11 +52,13 @@ async function findGroupByExactTitle(windowId, title) {
 }
 
 async function classifyTab(tab, categoryId) {
+  return moveTabToGroup(tab, getGroupConfig(categoryId));
+}
+
+async function moveTabToGroup(tab, groupConfig, preserveAppearance = false) {
   if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.windowId)) {
     throw new Error("無法取得目前分頁資訊。");
   }
-
-  const groupConfig = getGroupConfig(categoryId);
 
   return enqueueForWindow(tab.windowId, async () => {
     const existingGroup = await findGroupByExactTitle(
@@ -80,8 +83,8 @@ async function classifyTab(tab, categoryId) {
       created = true;
     }
 
-    // 每次都校正名稱與顏色，避免使用者手動改名後造成分類混淆。
-    await chrome.tabGroups.update(groupId, {
+    // 分類群組校正名稱與顏色；既有職缺群組保留使用者設定的外觀。
+    if (!preserveAppearance || created) await chrome.tabGroups.update(groupId, {
       title: groupConfig.title,
       color: groupConfig.color,
       collapsed: false,
@@ -118,17 +121,34 @@ async function handleMessage(message) {
   const tab = await getCurrentTab();
   if (message.type === "TOOLKIT_GET_CLASSIFIER_STATE") {
     const group = tab?.groupId >= 0 ? await chrome.tabGroups.get(tab.groupId) : null;
-    return { ok: true, canClassify: isResumeTab(tab), groupTitle: group?.title || "", categories: CONFIG.groups };
+    return { ok: true, canClassify: isResumeTab(tab), groupTitle: group?.title || "", categories: CONFIG.groups, jobGroups: CONFIG.jobGroups, canGroupJob: isWebTab(tab) };
+  }
+  if (message.type === "TOOLKIT_GROUP_JOB_TAB") {
+    if (!isWebTab(tab)) throw new Error("請先切換到要加入職缺群組的網頁。");
+    if (!CONFIG.jobGroups.includes(message.groupTitle)) throw new Error("請選擇有效的職缺群組。");
+    await ensureGroupingIdle();
+    return moveTabToGroup(tab, { title: message.groupTitle, color: "grey" }, true);
   }
   if (!isResumeTab(tab)) throw new Error("請先切換到 104 VIP 履歷頁再下標籤。");
-  // 分組會改變分頁順序；複製或匯出中禁止分類，以維持批次範圍。
-  const collector = await globalThis.RecruitingCollector.getState();
-  const pdf = globalThis.RecruitingPdfExporter.getState();
-  if (collector.running || pdf.running || globalThis.RecruitingWorkflow.getState().running) throw new Error("請等待目前複製或匯出完成，再下標籤。");
+  await ensureGroupingIdle();
   return classifyTab(tab, message.categoryId);
 }
+
+function isWebTab(tab) {
+  try { return ["https:", "http:"].includes(new URL(tab?.url).protocol); }
+  catch (_) { return false; }
+}
+async function ensureGroupingIdle() {
+  // 分組會改變分頁順序；複製或匯出中禁止移動，以維持批次範圍。
+  const collector = await globalThis.RecruitingCollector.getState();
+  const pdf = globalThis.RecruitingPdfExporter.getState();
+  if (collector.running || pdf.running || globalThis.RecruitingWorkflow.getState().running) {
+    throw new Error("請等待目前複製或匯出完成，再加入群組。");
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE"].includes(message?.type)) return false;
+  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB"].includes(message?.type)) return false;
   handleMessage(message).then(sendResponse).catch((error) => {
     console.error("[104 招募工作台] 分類操作失敗", { message: error.message });
     sendResponse({ ok: false, error: error.message || "分類失敗，請重試。" });
@@ -140,7 +160,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "toolkit-classifier") return;
   port.onMessage.addListener((message) => {
-    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE"].includes(message?.type)) {
+    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB"].includes(message?.type)) {
       port.postMessage({ ok: false, error: "不支援這個分類操作。" });
       return;
     }

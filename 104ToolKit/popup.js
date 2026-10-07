@@ -30,11 +30,17 @@ let workflowRunning = false;
 let jobsRunning = false;
 let classificationBusy = false;
 let canClassify = false;
+let canGroupJob = false;
 
 function updateClassificationAvailability() {
   document.querySelectorAll(".classification-button").forEach(button => {
     button.disabled = classificationBusy || jobsRunning || !canClassify;
   });
+  [ui.startWorkflow, ui.copyCurrent, ui.copyRight, ui.downloadCurrent, ui.downloadRight].forEach(button => {
+    button.disabled = jobsRunning || classificationBusy;
+  });
+  byId("jobGroupSelect").disabled = classificationBusy || jobsRunning || !canGroupJob;
+  byId("addJobGroup").disabled = classificationBusy || jobsRunning || !canGroupJob || !byId("jobGroupSelect").value;
 }
 
 function selectMode(mode) {
@@ -51,6 +57,21 @@ async function refreshClassification() {
   const result = await sendClassification({ type: "TOOLKIT_GET_CLASSIFIER_STATE" });
   if (!result?.ok) throw new Error(result?.error || "無法讀取分類。");
   canClassify = result.canClassify;
+  canGroupJob = result.canGroupJob;
+  byId("jobCurrentGroup").textContent = result.groupTitle || "尚未分類";
+  const select = byId("jobGroupSelect");
+  if (select.options.length === 1) {
+    (result.jobGroups || []).forEach(title => {
+      const option = document.createElement("option");
+      option.value = title;
+      option.textContent = title;
+      select.append(option);
+    });
+    const { lastJobGroup = "" } = await chrome.storage.local.get("lastJobGroup");
+    const preferred = result.jobGroups?.includes(result.groupTitle) ? result.groupTitle : lastJobGroup;
+    if (result.jobGroups?.includes(preferred)) select.value = preferred;
+  }
+  if (!canGroupJob) byId("jobGroupStatus").textContent = "請先切換到要加入職缺群組的網頁。";
   byId("classificationGroup").textContent = result.groupTitle || "尚未分類";
   groupInfo = { hasGroup: Boolean(result.groupTitle), title: result.groupTitle || "" };
   const actions = byId("classificationActions");
@@ -73,6 +94,28 @@ async function classifyCurrent(categoryId) {
     byId("classificationStatus").textContent = `已加入「${result.groupTitle}」群組。`;
   } catch (error) {
     byId("classificationStatus").textContent = `分類失敗：${errorText(error)}`;
+  } finally {
+    classificationBusy = false;
+    updateClassificationAvailability();
+  }
+}
+
+async function addCurrentToJobGroup() {
+  const groupTitle = byId("jobGroupSelect").value;
+  if (!groupTitle || classificationBusy || jobsRunning) return;
+  classificationBusy = true;
+  updateClassificationAvailability();
+  byId("jobGroupStatus").textContent = `正在加入「${groupTitle}」…`;
+  try {
+    const result = await sendClassification({ type: "TOOLKIT_GROUP_JOB_TAB", groupTitle });
+    if (!result?.ok) throw new Error(result?.error || "加入群組失敗。");
+    await refreshClassification();
+    byId("jobGroupStatus").textContent = `已${result.created ? "建立並加入" : "加入"}「${result.groupTitle}」群組。`;
+    byId("classificationStatus").textContent = "目前分頁已加入職缺群組；選擇分類會移至分類群組。";
+    try { await chrome.storage.local.set({ lastJobGroup: groupTitle }); }
+    catch (_) { /* 記住選項失敗不影響已完成的分組。 */ }
+  } catch (error) {
+    byId("jobGroupStatus").textContent = `加入失敗：${errorText(error)}`;
   } finally {
     classificationBusy = false;
     updateClassificationAvailability();
@@ -153,7 +196,7 @@ function renderWorkflow(state = {}) {
   ui.workflowMessage.textContent = state.error
     ? `${state.lastMessage || "工作流失敗"} ${state.error}`
     : (state.lastMessage || "從目前分頁開始，向右處理連續的 104 履歷分頁。");
-  ui.startWorkflow.disabled = running;
+  ui.startWorkflow.disabled = running || jobsRunning || classificationBusy;
   ui.startWorkflow.classList.toggle("is-hidden", running);
   ui.stopWorkflow.classList.toggle("is-hidden", !running);
 
@@ -161,9 +204,9 @@ function renderWorkflow(state = {}) {
 
 function renderCopy(state = {}) {
   const running = Boolean(state.running);
-  ui.copyCurrent.disabled = running || workflowRunning;
-  ui.copyRight.disabled = running || workflowRunning;
-  ui.stopCopy.disabled = !running || workflowRunning;
+  ui.copyCurrent.disabled = running || workflowRunning || jobsRunning || classificationBusy;
+  ui.copyRight.disabled = running || workflowRunning || jobsRunning || classificationBusy;
+  ui.stopCopy.disabled = !running || workflowRunning || classificationBusy;
   ui.copyCount.textContent = `${state.count || 0} 筆`;
   const statusText = normalizeCopyStatus(state.lastStatusText);
   ui.copyStatus.textContent = running
@@ -173,9 +216,9 @@ function renderCopy(state = {}) {
 
 function renderPdf(state = {}) {
   const running = Boolean(state.running);
-  ui.downloadCurrent.disabled = running || workflowRunning;
-  ui.downloadRight.disabled = running || workflowRunning;
-  ui.stopPdf.disabled = !running || workflowRunning;
+  ui.downloadCurrent.disabled = running || workflowRunning || jobsRunning || classificationBusy;
+  ui.downloadRight.disabled = running || workflowRunning || jobsRunning || classificationBusy;
+  ui.stopPdf.disabled = !running || workflowRunning || classificationBusy;
   ui.pdfProgress.textContent = state.progressText || "0 / 0";
   ui.pdfStatus.textContent = state.lastMessage || "待命中";
 }
@@ -287,6 +330,8 @@ async function startPdf(cmd) {
 }
 
 function bindActions() {
+  byId("jobGroupSelect").addEventListener("change", updateClassificationAvailability);
+  byId("addJobGroup").addEventListener("click", addCurrentToJobGroup);
   document.querySelectorAll(".classification-button").forEach(button => {
     button.addEventListener("click", () => classifyCurrent(button.dataset.category));
   });
@@ -354,8 +399,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     await loadSettings();
     await refreshClassification();
     if (canClassify) byId("classificationStatus").textContent = "選擇分類即可為目前分頁下標籤。";
+    if (canGroupJob) byId("jobGroupStatus").textContent = "同名群組已存在時直接加入，沒有時自動建立。";
   } catch (error) {
     byId("classificationStatus").textContent = `初始化失敗：${errorText(error)}`;
+    byId("jobGroupStatus").textContent = `初始化失敗：${errorText(error)}`;
     updateClassificationAvailability();
   }
   setInterval(refreshStates, 900);
