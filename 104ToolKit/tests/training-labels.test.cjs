@@ -1,6 +1,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const api=require('../training-labels.js');
+global.RecruitingOutputDirectory={getTarget:async()=>null};
 let stored={};const downloads=[];
 global.chrome={storage:{local:{get:async key=>({[key]:stored[key]}),set:async value=>Object.assign(stored,value),remove:async key=>{delete stored[key];}}},downloads:{download:async opts=>{downloads.push(opts);return 1;}}};
 test('搜尋頁與預覽頁的同一履歷使用同一識別；不同企業快照不混用',()=>{

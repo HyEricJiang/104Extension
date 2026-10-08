@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG"}={}) {
+function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",selectedDirectory=false}={}) {
  const stored={settings:{subdir:'104履歷下載區/',filenamePrefixMode:'tabGroup',firstWait:0,nextWait:0}};
  const events=new Set();const downloads=[];let nextTab=100;
  const noopEvent={addListener(){},removeListener(){}};
@@ -38,9 +38,14 @@ function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG"}
     search:async({id})=>[{filename:`/Downloads/104履歷下載區/${groupTitle}_Test (${id}).pdf`}]
    }
   }});
+ const fileWrites=[];
+ context.RecruitingOutputDirectory={getTarget:async()=>selectedDirectory?{name:"訓練資料"}:null,writeFile:async(_target,filename,data)=>{
+   fileWrites.push({filename,data});return{filename,path:`訓練資料/${filename}`,directWrite:true};
+ }};
+ context.TextEncoder=TextEncoder;
  const root=path.join(__dirname,'..');
  for(const file of ['training-labels.js','pdf-exporter.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
- return {context,downloads};
+ return {context,downloads,fileWrites};
 }
 
 test('實際 PDF 匯出流程使用職稱命名，CSV 對應實際重名序號與五分類',async()=>{
@@ -78,4 +83,15 @@ test('不合適群組仍可下載全部 PDF 並納入訓練分類 CSV',async()=>
  assert.ok(csv.includes('不合適_Test (1).pdf'));
  assert.ok(csv.includes('"不合適","未分類"'));
  assert.ok(csv.includes('search:TEST3'));
+});
+
+test('選擇資料夾後 PDF 與 CSV 使用同一位置，不走瀏覽器下載位置',async()=>{
+ const {context,downloads,fileWrites}=harness({selectedDirectory:true});
+ await context.RecruitingPdfExporter.runDownloadRightBatch();
+ assert.equal(downloads.length,0);
+ assert.equal(fileWrites.filter(f=>f.filename.endsWith('.pdf')).length,3);
+ const csv=new TextDecoder().decode(fileWrites.find(f=>f.filename.endsWith('.csv')).data);
+ assert.ok(csv.includes('訓練資料/Jr.Java PG_Test.pdf'));
+ assert.ok(csv.includes('"true"'));
+ assert.ok(context.RecruitingPdfExporter.getState().lastMessage.includes('分類清單已儲存'));
 });

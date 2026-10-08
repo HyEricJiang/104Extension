@@ -76,10 +76,12 @@
             <input id="filenameSuffix" placeholder="例如：104">
           </label>
         </div>
-        <label class="field">
-          <span>下載子資料夾</span>
-          <input id="subdir" placeholder="例如：104履歷下載區/">
-        </label>
+        <div class="field">
+          <span>存放資料夾</span>
+          <div id="outputLocation" class="detail-status" aria-live="polite">讀取中…</div>
+          <button id="chooseOutputDirectory" type="button" class="button button-secondary button-block">選擇資料夾</button>
+          <p class="helper-text">PDF 與分類 CSV 共用此位置，不需輸入路徑。</p>
+        </div>
         <div class="field-grid">
           <label class="field">
             <span>首份等待（ms）</span>
@@ -174,6 +176,7 @@
 
     <footer>只會在 vip.104.com.tw 執行；個資不會傳送到外部服務。</footer>
   </main>
+  <script src="output-directory.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

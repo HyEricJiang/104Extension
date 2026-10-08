@@ -261,6 +261,7 @@ async function runDownloadRightBatch() {
 async function runIdnoExportJob(items, jobTitle) {
   await syncSettingsFromStorage();
 
+  const outputTarget = await globalThis.RecruitingOutputDirectory.getTarget();
   state.running = true;
   state.stopRequested = false;
   state.currentIndex = 0;
@@ -411,15 +412,15 @@ async function runIdnoExportJob(items, jobTitle) {
       if (!data) throw new Error("printToPDF 沒有回傳資料。");
 
       const pdfBytes = base64ToUint8Array(data);
-      const downloadId = await downloadPdfBytes(pdfBytes, filename);
+      const downloadResult = await downloadPdfBytes(pdfBytes, filename, outputTarget);
 
       state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}`;
       report.ok++;
       // 以 Chrome 完成下載後的實際名稱建立對照，涵蓋重名自動加序號。
-      let actualPath = filename;
-      let filenameVerified = false;
+      let actualPath = downloadResult?.directWrite ? downloadResult.path : filename;
+      let filenameVerified = Boolean(downloadResult?.directWrite);
       try {
-        const downloaded = (await chrome.downloads.search({ id: downloadId }))[0];
+        const downloaded = downloadResult?.directWrite ? null : (await chrome.downloads.search({ id: downloadResult }))[0];
         if (downloaded?.filename) { actualPath = downloaded.filename; filenameVerified = true; }
       }
       catch (_) { /* 無法讀取下載記錄時保留原請求檔名。 */ }
@@ -449,7 +450,7 @@ async function runIdnoExportJob(items, jobTitle) {
   if (trainingRows.length) {
     try {
       const subdir = (state.settings.subdir || "").trim();
-      await globalThis.ResumeTrainingLabels.downloadReport(trainingRows, subdir ? normalizeSubdir(subdir) : "");
+      await globalThis.ResumeTrainingLabels.downloadReport(trainingRows, subdir ? normalizeSubdir(subdir) : "", true, outputTarget);
     } catch (error) {
       trainingReportError = error?.message || String(error);
       logError("分類清單下載失敗，PDF 已保留。", { error: trainingReportError });
@@ -469,7 +470,7 @@ async function runIdnoExportJob(items, jobTitle) {
     badgeErrThenReset(`完成：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`);
   }
   if (trainingReportError) state.lastMessage += "；分類清單未下載，請按「重新下載分類清單」重試。";
-  else if (trainingRows.length) state.lastMessage += `；分類清單已提交下載（${trainingRows.length} 筆）`;
+  else if (trainingRows.length) state.lastMessage += `；分類清單${outputTarget ? "已儲存" : "已提交下載"}（${trainingRows.length} 筆）`;
 }
 
 async function getActiveTab() {
@@ -643,7 +644,8 @@ function base64ToUint8Array(base64) {
   return bytes;
 }
 
-async function downloadPdfBytes(uint8Array, filename) {
+async function downloadPdfBytes(uint8Array, filename, outputTarget) {
+  if (outputTarget) return globalThis.RecruitingOutputDirectory.writeFile(outputTarget, filename.split(/[\\/]/).pop(), uint8Array);
   const base64 = uint8ToBase64(uint8Array);
   const url = `data:application/pdf;base64,${base64}`;
   const downloadId = await chrome.downloads.download({ url, filename, conflictAction: "uniquify", saveAs: false });

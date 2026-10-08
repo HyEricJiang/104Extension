@@ -43,7 +43,7 @@
     const columns = ["pdfFilename", "pdfPath", "filenameVerified", "jobTitle", "trainingLabel", "resumeKey", "labelUpdatedAt", "exportedAt"];
     return "\uFEFF" + [columns.map(csvCell).join(","), ...rows.map(row => columns.map(key => csvCell(row[key])).join(","))].join("\r\n");
   }
-  async function downloadReport(rows, subdir = "", remember = true) {
+  async function downloadReport(rows, subdir = "", remember = true, outputTarget = undefined) {
     if (!rows.length) throw new Error("尚無已完成的 PDF 可匯出分類清單。");
     if (remember) {
       lastBundle = { rows, subdir };
@@ -51,7 +51,13 @@
       catch (_) { console.warn("[104 招募工作台] 分類清單僅暫存在背景服務，無法持久保存。"); }
     }
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `${subdir}training-labels_${stamp}.csv`;
+    const name = `training-labels_${stamp}.csv`;
+    const target = outputTarget === undefined ? await globalThis.RecruitingOutputDirectory.getTarget() : outputTarget;
+    if (target) {
+      const result = await globalThis.RecruitingOutputDirectory.writeFile(target, name, new TextEncoder().encode(toCsv(rows)));
+      return { ok: true, count: rows.length, filename: result.path, directWrite: true };
+    }
+    const filename = `${subdir}${name}`;
     await chrome.downloads.download({ url: "data:text/csv;charset=utf-8," + encodeURIComponent(toCsv(rows)), filename, conflictAction: "uniquify", saveAs: false });
     return { ok: true, count: rows.length, filename };
   }

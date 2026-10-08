@@ -25,6 +25,7 @@ const ui = {
   pdfStatus: byId("pdfStatus")
 };
 
+let legacySubdir = "";
 let groupInfo = { hasGroup: false, title: "" };
 let workflowRunning = false;
 let jobsRunning = false;
@@ -306,7 +307,9 @@ function buildPreviewFilename() {
 
 async function loadSettings() {
   const { settings = {} } = await chrome.storage.local.get("settings");
-  byId("subdir").value = settings.subdir ?? "104履歷下載區/";
+  legacySubdir = settings.subdir ?? "104履歷下載區/";
+  const output = await RecruitingOutputDirectory.status();
+  byId("outputLocation").textContent = output.selected ? output.name : (legacySubdir ? `瀏覽器下載位置／${legacySubdir}` : output.name);
   byId("prefixMode").value = settings.filenamePrefixMode ?? "manual";
   byId("filenamePrefix").value = settings.filenamePrefix ?? "";
   byId("filenameSuffix").value = settings.filenameSuffix ?? "";
@@ -319,7 +322,7 @@ async function loadSettings() {
 
 async function saveSettings() {
   const settings = {
-    subdir: byId("subdir").value.trim(),
+    subdir: legacySubdir,
     filenamePrefixMode: byId("prefixMode").value,
     filenamePrefix: byId("filenamePrefix").value.trim(),
     filenameSuffix: byId("filenameSuffix").value.trim(),
@@ -351,6 +354,12 @@ async function startPdf(cmd) {
 }
 
 function bindActions() {
+  byId("chooseOutputDirectory").addEventListener("click", async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      await chrome.tabs.create({ url: chrome.runtime.getURL("directory.html") + `?returnTab=${tab?.id || ""}` });
+    } catch (error) { byId("outputLocation").textContent = `無法開啟資料夾設定：${errorText(error)}`; }
+  });
   byId("removeTrainingLabel").addEventListener("click", removeCurrentTrainingLabel);
   byId("downloadTrainingReport").addEventListener("click", async () => {
     const button = byId("downloadTrainingReport");
@@ -358,7 +367,7 @@ function bindActions() {
     try {
       const result = await sendClassification({ type: "TOOLKIT_DOWNLOAD_TRAINING_REPORT" });
       if (!result?.ok) throw new Error(result?.error || "分類清單下載失敗。");
-      byId("trainingReportStatus").textContent = `已提交下載：${result.count} 筆分類紀錄。`;
+      byId("trainingReportStatus").textContent = `${result.directWrite ? "已儲存" : "已提交下載"}：${result.count} 筆分類紀錄。`;
     } catch (error) { byId("trainingReportStatus").textContent = errorText(error); }
     finally { button.disabled = false; }
   });
@@ -407,7 +416,7 @@ function bindActions() {
       markSettingsDirty();
     });
   });
-  ["subdir", "firstWait", "nextWait"].forEach((id) => {
+  ["firstWait", "nextWait"].forEach((id) => {
     byId(id).addEventListener("input", markSettingsDirty);
     byId(id).addEventListener("change", markSettingsDirty);
   });
