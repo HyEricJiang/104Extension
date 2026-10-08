@@ -2,17 +2,13 @@
 /**
  * 104 履歷分頁分類器：背景服務
  *
- * 此檔案只負責 Chrome 分頁群組操作，不讀取或保存履歷內容。
+ * 此檔案協調獨立訓練標記與職缺群組；標記不會移動分頁。
  */
 
 const CONFIG = Object.freeze({
   messageType: "CLASSIFY_CURRENT_TAB",
   jobGroups: Object.freeze(["Jr.Net PG", "Sr.Net PG", "Jr.Java PG", "Sr.Java PG", "Jr.QA", "Sr.QA", "SA", "PM"]),
-  groups: Object.freeze({
-    recommendedUnsuitable: Object.freeze({ title: "推薦但不合適", color: "yellow" }),
-    reviewedSuitable: Object.freeze({ title: "人工審核但合適", color: "blue" }),
-    excludedRecommended: Object.freeze({ title: "排除但推薦", color: "purple" }),
-  }),
+  groups: Object.freeze(Object.fromEntries(Object.entries(globalThis.ResumeTrainingLabels.CATEGORIES).map(([id, title]) => [id, Object.freeze({ title })]))),
 });
 
 // 同一視窗的快速連點依序執行，避免同名群組被重複建立。
@@ -52,7 +48,20 @@ async function findGroupByExactTitle(windowId, title) {
 }
 
 async function classifyTab(tab, categoryId) {
-  return moveTabToGroup(tab, getGroupConfig(categoryId));
+  getGroupConfig(categoryId);
+  const info = await getResumeInfo(tab);
+  if (!info) throw new Error("無法辨識這份履歷，請開啟完整履歷頁再標記。");
+  const record = await globalThis.ResumeTrainingLabels.save(info, categoryId);
+  return { ok: true, trainingLabel: record.label };
+}
+async function getResumeInfo(tab) {
+  if (!isResumeTab(tab)) return null;
+  let info = globalThis.ResumeTrainingLabels.parseResumeInfoFromUrl(tab.url);
+  if (!info && new URL(tab.url).pathname.toLowerCase() === "/apply/applyresume") {
+    const url = await globalThis.RecruitingPdfExporter.findFirstResumeUrlInTab(tab.id);
+    info = globalThis.ResumeTrainingLabels.parseResumeInfoFromUrl(url);
+  }
+  return info;
 }
 
 async function moveTabToGroup(tab, groupConfig, preserveAppearance = false) {
@@ -118,10 +127,13 @@ function isResumeTab(tab) {
   } catch (_) { return false; }
 }
 async function handleMessage(message) {
+  if (message.type === "TOOLKIT_DOWNLOAD_TRAINING_REPORT") return globalThis.ResumeTrainingLabels.downloadLastReport();
   const tab = await getCurrentTab();
   if (message.type === "TOOLKIT_GET_CLASSIFIER_STATE") {
     const group = tab?.groupId >= 0 ? await chrome.tabGroups.get(tab.groupId) : null;
-    return { ok: true, canClassify: isResumeTab(tab), groupTitle: group?.title || "", categories: CONFIG.groups, jobGroups: CONFIG.jobGroups, canGroupJob: isWebTab(tab) };
+    const info = await getResumeInfo(tab);
+    const record = info ? await globalThis.ResumeTrainingLabels.read(info) : null;
+    return { ok: true, trainingLabel: record?.label || "", canClassify: Boolean(info), groupTitle: group?.title || "", categories: CONFIG.groups, jobGroups: CONFIG.jobGroups, canGroupJob: isWebTab(tab) };
   }
   if (message.type === "TOOLKIT_GROUP_JOB_TAB") {
     if (!isWebTab(tab)) throw new Error("請先切換到要加入職缺群組的網頁。");
@@ -130,7 +142,6 @@ async function handleMessage(message) {
     return moveTabToGroup(tab, { title: message.groupTitle, color: "grey" }, true);
   }
   if (!isResumeTab(tab)) throw new Error("請先切換到 104 VIP 履歷頁再下標籤。");
-  await ensureGroupingIdle();
   return classifyTab(tab, message.categoryId);
 }
 
@@ -148,7 +159,7 @@ async function ensureGroupingIdle() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB"].includes(message?.type)) return false;
+  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_DOWNLOAD_TRAINING_REPORT"].includes(message?.type)) return false;
   handleMessage(message).then(sendResponse).catch((error) => {
     console.error("[104 招募工作台] 分類操作失敗", { message: error.message });
     sendResponse({ ok: false, error: error.message || "分類失敗，請重試。" });
@@ -160,7 +171,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "toolkit-classifier") return;
   port.onMessage.addListener((message) => {
-    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB"].includes(message?.type)) {
+    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_DOWNLOAD_TRAINING_REPORT"].includes(message?.type)) {
       port.postMessage({ ok: false, error: "不支援這個分類操作。" });
       return;
     }

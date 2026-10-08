@@ -269,6 +269,7 @@ async function runIdnoExportJob(items, jobTitle) {
   state.lastMessage = `開始：${jobTitle}`;
   badgeIdle(`準備：${jobTitle}`);
 
+  const trainingRows = [];
   const report = { ok: 0, fail: 0, stopped: false, failures: [] };
 
   for (let i = 0; i < items.length; i++) {
@@ -287,6 +288,7 @@ async function runIdnoExportJob(items, jobTitle) {
     badgeRunning(state.currentIndex, state.total, `${jobTitle}：${state.currentIndex}/${state.total}`);
 
     try {
+      const label = await globalThis.ResumeTrainingLabels.read(info);
       const url = buildPreviewUrl(info);
 
       // 🌟 核心要求 1：安靜的背景分頁 (絕不跳出新視窗干擾)
@@ -413,6 +415,16 @@ async function runIdnoExportJob(items, jobTitle) {
 
       state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}`;
       report.ok++;
+      // 以 Chrome 完成下載後的實際名稱建立對照，涵蓋重名自動加序號。
+      let actualPath = filename;
+      let filenameVerified = false;
+      try {
+        const downloaded = (await chrome.downloads.search({ id: downloadId }))[0];
+        if (downloaded?.filename) { actualPath = downloaded.filename; filenameVerified = true; }
+      }
+      catch (_) { /* 無法讀取下載記錄時保留原請求檔名。 */ }
+      const actualName = actualPath.split(/[\\/]/).pop();
+      trainingRows.push({ pdfFilename: actualName, pdfPath: actualPath, filenameVerified, jobTitle: info.sourceTabGroupTitle || "", trainingLabel: label?.label || "未分類", resumeKey: globalThis.ResumeTrainingLabels.identity(info), labelUpdatedAt: label?.updatedAt || "", exportedAt: new Date().toISOString() });
     } catch (error) {
       const errMessage = error?.message || String(error);
       report.fail++;
@@ -433,6 +445,16 @@ async function runIdnoExportJob(items, jobTitle) {
     }
   }
 
+  let trainingReportError = "";
+  if (trainingRows.length) {
+    try {
+      const subdir = (state.settings.subdir || "").trim();
+      await globalThis.ResumeTrainingLabels.downloadReport(trainingRows, subdir ? normalizeSubdir(subdir) : "");
+    } catch (error) {
+      trainingReportError = error?.message || String(error);
+      logError("分類清單下載失敗，PDF 已保留。", { error: trainingReportError });
+    }
+  }
   state.running = false;
   state.stopRequested = false;
 
@@ -446,6 +468,8 @@ async function runIdnoExportJob(items, jobTitle) {
     state.lastMessage = `完成：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`;
     badgeErrThenReset(`完成：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`);
   }
+  if (trainingReportError) state.lastMessage += "；分類清單未下載，請按「重新下載分類清單」重試。";
+  else if (trainingRows.length) state.lastMessage += `；分類清單已提交下載（${trainingRows.length} 筆）`;
 }
 
 async function getActiveTab() {
@@ -523,22 +547,7 @@ async function findFirstResumeUrlInTab(tabId) {
 }
 
 function parseResumeInfoFromUrl(url) {
-  try {
-    const u = new URL(url);
-    const pathname = (u.pathname || "").toLowerCase();
-    const pageSource = (u.searchParams.get("pageSource") || "").toLowerCase().trim();
-    const ec = (u.searchParams.get("ec") || "").trim();
-    const idno = (u.searchParams.get("idno") || "").trim() || (u.searchParams.get("searchEngineIdNos") || "").trim();
-    const snapshotId = (u.searchParams.get("sn") || "").trim() || (u.searchParams.get("snapshotIds") || "").trim();
-
-    if (pathname === "/apply/applyresume" && snapshotId && ec) return { mode: "apply", snapshotId, ec };
-    if (pageSource === "apply" && snapshotId && ec) return { mode: "apply", snapshotId, ec };
-    if (pageSource === "search" && idno) return { mode: "search", idno };
-    if ((pathname === "/document/master" || pageSource === "document") && snapshotId) return { mode: "document", snapshotId, ec };
-    if (idno) return { mode: "search", idno };
-    if (snapshotId) return { mode: "document", snapshotId, ec };
-    return null;
-  } catch (_) { return null; }
+  return globalThis.ResumeTrainingLabels.parseResumeInfoFromUrl(url);
 }
 
 function buildPreviewUrl(info) {
@@ -679,6 +688,7 @@ function sleep(ms) {
  * 工作流協調器只需要批次啟動與狀態查詢，不直接接觸 PDF 內部細節。
  */
 globalThis.RecruitingPdfExporter = Object.freeze({
+  findFirstResumeUrlInTab,
   runDownloadRightBatch,
   runDownloadCurrent,
   getState: () => ({ ...state }),

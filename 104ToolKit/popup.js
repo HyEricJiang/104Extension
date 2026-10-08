@@ -34,7 +34,7 @@ let canGroupJob = false;
 
 function updateClassificationAvailability() {
   document.querySelectorAll(".classification-button").forEach(button => {
-    button.disabled = classificationBusy || jobsRunning || !canClassify;
+    button.disabled = classificationBusy || !canClassify;
   });
   [ui.startWorkflow, ui.copyCurrent, ui.copyRight, ui.downloadCurrent, ui.downloadRight].forEach(button => {
     button.disabled = jobsRunning || classificationBusy;
@@ -72,11 +72,11 @@ async function refreshClassification() {
     if (result.jobGroups?.includes(preferred)) select.value = preferred;
   }
   if (!canGroupJob) byId("jobGroupStatus").textContent = "請先切換到要加入職缺群組的網頁。";
-  byId("classificationGroup").textContent = result.groupTitle || "尚未分類";
+  byId("classificationGroup").textContent = result.trainingLabel || "尚未標記";
   groupInfo = { hasGroup: Boolean(result.groupTitle), title: result.groupTitle || "" };
   const actions = byId("classificationActions");
   actions.querySelectorAll("button").forEach(button => {
-    button.setAttribute("aria-pressed", String(button.textContent === result.groupTitle));
+    button.setAttribute("aria-pressed", String(button.textContent === result.trainingLabel));
   });
   if (!canClassify) byId("classificationStatus").textContent = "請先切換到 104 VIP 履歷頁再下標籤。";
   updateClassificationAvailability();
@@ -86,12 +86,12 @@ async function refreshClassification() {
 async function classifyCurrent(categoryId) {
   classificationBusy = true;
   updateClassificationAvailability();
-  byId("classificationStatus").textContent = "正在更新目前分頁群組…";
+  byId("classificationStatus").textContent = "正在保存此履歷的訓練分類…";
   try {
     const result = await sendClassification({ type: "CLASSIFY_CURRENT_TAB", categoryId });
     if (!result?.ok) throw new Error(result?.error || "分類失敗。");
     await refreshClassification();
-    byId("classificationStatus").textContent = `已加入「${result.groupTitle}」群組。`;
+    byId("classificationStatus").textContent = `已保存「${result.trainingLabel}」；職缺群組保持原設定。`;
   } catch (error) {
     byId("classificationStatus").textContent = `分類失敗：${errorText(error)}`;
   } finally {
@@ -111,7 +111,7 @@ async function addCurrentToJobGroup() {
     if (!result?.ok) throw new Error(result?.error || "加入群組失敗。");
     await refreshClassification();
     byId("jobGroupStatus").textContent = `已${result.created ? "建立並加入" : "加入"}「${result.groupTitle}」群組。`;
-    byId("classificationStatus").textContent = "目前分頁已加入職缺群組；選擇分類會移至分類群組。";
+    byId("classificationStatus").textContent = "職缺群組已更新；此履歷的訓練分類保持原設定。";
     try { await chrome.storage.local.set({ lastJobGroup: groupTitle }); }
     catch (_) { /* 記住選項失敗不影響已完成的分組。 */ }
   } catch (error) {
@@ -330,6 +330,16 @@ async function startPdf(cmd) {
 }
 
 function bindActions() {
+  byId("downloadTrainingReport").addEventListener("click", async () => {
+    const button = byId("downloadTrainingReport");
+    button.disabled = true;
+    try {
+      const result = await sendClassification({ type: "TOOLKIT_DOWNLOAD_TRAINING_REPORT" });
+      if (!result?.ok) throw new Error(result?.error || "分類清單下載失敗。");
+      byId("trainingReportStatus").textContent = `已提交下載：${result.count} 筆分類紀錄。`;
+    } catch (error) { byId("trainingReportStatus").textContent = errorText(error); }
+    finally { button.disabled = false; }
+  });
   byId("jobGroupSelect").addEventListener("change", updateClassificationAvailability);
   byId("addJobGroup").addEventListener("click", addCurrentToJobGroup);
   document.querySelectorAll(".classification-button").forEach(button => {
@@ -398,7 +408,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadSettings();
     await refreshClassification();
-    if (canClassify) byId("classificationStatus").textContent = "選擇分類即可為目前分頁下標籤。";
+    if (canClassify) byId("classificationStatus").textContent = "選擇分類即可保存此履歷的訓練標記。";
     if (canGroupJob) byId("jobGroupStatus").textContent = "同名群組已存在時直接加入，沒有時自動建立。";
   } catch (error) {
     byId("classificationStatus").textContent = `初始化失敗：${errorText(error)}`;

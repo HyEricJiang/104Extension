@@ -23,12 +23,14 @@
     </div>
     <section id="tagWorkflow" role="tabpanel" aria-labelledby="tagTab">
       <div class="workflow-card">
-        <div class="section-heading"><h2>選擇履歷分類</h2><span id="classificationGroup" class="scope-badge">尚未分類</span></div>
-        <p class="section-copy">將目前分頁加入同名 Chrome 分頁群組。</p>
+        <div class="section-heading"><h2>選擇模型訓練分類</h2><span id="classificationGroup" class="scope-badge">尚未標記</span></div>
+        <p class="section-copy">只保存此履歷的訓練分類，不移動分頁、不更改職缺群組。</p>
         <div id="classificationActions" class="classification-actions">
-          <button type="button" class="classification-button" data-category="recommendedUnsuitable" aria-pressed="false" disabled>推薦但不合適</button>
-          <button type="button" class="classification-button" data-category="reviewedSuitable" aria-pressed="false" disabled>人工審核但合適</button>
-          <button type="button" class="classification-button" data-category="excludedRecommended" aria-pressed="false" disabled>排除但推薦</button>
+          <button type="button" class="classification-button" data-category="systemRecommendedUnsuitable" aria-pressed="false" disabled>系統推薦但不合適</button>
+          <button type="button" class="classification-button" data-category="reviewedShouldRecommend" aria-pressed="false" disabled>人工審核但需要推薦</button>
+          <button type="button" class="classification-button" data-category="reviewedShouldExclude" aria-pressed="false" disabled>人工審核但應該排除</button>
+          <button type="button" class="classification-button" data-category="wronglyExcludedNeedsReview" aria-pressed="false" disabled>不應排除需人工審核</button>
+          <button type="button" class="classification-button" data-category="wronglyExcludedShouldRecommend" aria-pressed="false" disabled>不應排除應推薦</button>
         </div>
         <p id="classificationStatus" class="status-message" aria-live="polite">正在讀取目前分頁…</p>
       </div>
@@ -105,6 +107,9 @@
         <span class="scope-badge">本頁往右</span>
       </div>
       <p class="section-copy">先整理聯絡資料並複製，再依照上方設定匯出所有履歷。</p>
+      <p class="helper-text">PDF 檔名沿用職缺設定；完成後另外下載訓練分類 CSV，未標記的履歷列為「未分類」。</p>
+      <button id="downloadTrainingReport" type="button" class="button button-secondary button-block">重新下載分類清單</button>
+      <p id="trainingReportStatus" class="status-message" aria-live="polite"></p>
       <button id="startWorkflow" class="button button-primary button-block">
         <span>開始複製並匯出</span>
         <span aria-hidden="true">→</span>

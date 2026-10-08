@@ -212,7 +212,7 @@ footer { padding: 12px 4px 0; color: var(--ui-muted); text-align: center; font-s
 .mode-tab[aria-selected="true"] { border-bottom-color: var(--ui-navy); color: var(--ui-navy); }
 .classification-actions { display: grid; gap: 10px; margin: 16px 0; }
 .classification-button { min-height: 48px; padding: 12px 14px; text-align: left; border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius); background: var(--ui-surface); color: var(--ui-ink); cursor: pointer; font-weight: 700; }
-.classification-button[data-category="excludedRecommended"] { background: var(--ui-page); }
+.classification-button[data-category="wronglyExcludedShouldRecommend"] { background: var(--ui-page); }
 .classification-button[aria-pressed="true"] { outline: 2px solid var(--ui-navy); outline-offset: 1px; }
 .classification-button:disabled { opacity: .55; cursor: default; }
 #classificationGroup { white-space: normal; text-align: center; max-width: 160px; }

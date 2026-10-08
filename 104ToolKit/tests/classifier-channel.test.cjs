@@ -8,19 +8,20 @@ function loadWorker() {
   const connections = [];
   const messages = [];
   const groups = [];
+  const storage = {};
   const actions = new Proxy({}, { get: () => async () => {} });
   const context = vm.createContext({
     console, URL, setTimeout, clearTimeout, setInterval, clearInterval,
     chrome: {
       action: actions,
-      storage: {local: {get: async () => ({}), set: async () => {}}},
+      storage: {local: {get: async key => ({[key]: storage[key]}), set: async value => Object.assign(storage,value)}},
       runtime: {
         onInstalled: {addListener: () => {}},
         onMessage: {addListener: fn => messages.push(fn)},
         onConnect: {addListener: fn => connections.push(fn)},
         sendMessage: async () => ({ok:true})
       },
-      tabs: {query: async () => [{id:17,windowId:7,groupId:-1,url:'https://vip.104.com.tw/search/SearchResumeMaster?id=1'}],
+      tabs: {query: async () => [{id:17,windowId:7,groupId:-1,url:'https://vip.104.com.tw/search/SearchResumeMaster?idno=TEST1'}],
         group: async () => 40},
       tabGroups: {query: async () => groups, update: async (id,group) => groups.push({id,...group})}
     }
@@ -42,20 +43,20 @@ function request(worker, message) {
   });
 }
 
-test('完整背景入口載入分類通道，初始化取得三個分類', async()=>{
+test('完整背景入口載入分類通道，初始化取得五個分類', async()=>{
   const worker=loadWorker();
   const state=await request(worker,{type:'TOOLKIT_GET_CLASSIFIER_STATE'});
   assert.equal(state.ok,true);
   assert.equal(state.canClassify,true);
-  assert.deepEqual(Object.values(state.categories).map(c=>c.title),['推薦但不合適','人工審核但合適','排除但推薦']);
+  assert.deepEqual(Object.values(state.categories).map(c=>c.title),['系統推薦但不合適','人工審核但需要推薦','人工審核但應該排除','不應排除需人工審核','不應排除應推薦']);
 });
 
 test('透過專用通道可下標籤，且其他訊息監聽器不會攔截回覆', async()=>{
   const worker=loadWorker();
   worker.messages.push((_message,_sender,reply)=>reply({ok:false,error:'其他模組回覆'}));
-  const result=await request(worker,{type:'CLASSIFY_CURRENT_TAB',categoryId:'excludedRecommended'});
+  const result=await request(worker,{type:'CLASSIFY_CURRENT_TAB',categoryId:'wronglyExcludedShouldRecommend'});
   assert.equal(result.ok,true);
-  assert.equal(result.groupTitle,'排除但推薦');
+  assert.equal(result.trainingLabel,'不應排除應推薦');
 });
 
 test('分類通道回傳操作失敗原因，不回傳空白',async()=>{
