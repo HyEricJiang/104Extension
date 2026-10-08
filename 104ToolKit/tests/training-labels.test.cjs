@@ -35,3 +35,14 @@ test('分類清單保存可重下載；空清單不產生誤導檔案',async()=>
  assert.ok(downloads[0].filename.startsWith('104履歷下載區/training-labels_'));
  await assert.rejects(api.downloadReport([]),/尚無/);
 });
+
+test('分類清單下載失敗後可重試最新清單，不誤下載上一批',async()=>{
+ const rows=[{pdfFilename:'latest.pdf',resumeKey:'search:latest',trainingLabel:'不應排除應推薦'}];
+ chrome.downloads.download=async()=>{throw Error('下載遭拒');};
+ await assert.rejects(api.downloadReport(rows),/下載遭拒/);
+ let retried;
+ chrome.downloads.download=async options=>{retried=options;return 3;};
+ await api.downloadLastReport();
+ assert.ok(decodeURIComponent(retried.url).includes('latest.pdf'));
+ assert.ok(decodeURIComponent(retried.url).includes('不應排除應推薦'));
+});
