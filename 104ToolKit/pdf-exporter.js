@@ -64,6 +64,7 @@ function logError(message, error = null) {
 }
 
 function badgeSet(text, color, title) {
+  if (globalThis.RecruitingWorkflow?.getState().running) return;
   chrome.action.setBadgeText({ text: text || "" });
   if (color) chrome.action.setBadgeBackgroundColor({ color });
   if (title) chrome.action.setTitle({ title });
@@ -262,6 +263,7 @@ async function runIdnoExportJob(items, jobTitle) {
   await syncSettingsFromStorage();
 
   const outputTarget = await globalThis.RecruitingOutputDirectory.getTarget();
+  state.exportSummary = null;
   state.running = true;
   state.stopRequested = false;
   state.currentIndex = 0;
@@ -444,6 +446,7 @@ async function runIdnoExportJob(items, jobTitle) {
     }
   }
 
+  state.exportSummary = { requested: items.length, ok: report.ok, fail: report.fail, regularFiles: report.regularFiles, trainingFiles: report.trainingFiles, stopped: report.stopped };
   state.running = false;
   state.stopRequested = false;
 

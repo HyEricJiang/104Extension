@@ -348,9 +348,27 @@ async function startCopy(type) {
   await refreshStates();
 }
 
+async function launchExport(action) {
+  const output = await RecruitingOutputDirectory.status();
+  if (output.selected) {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const baseUrl = chrome.runtime.getURL("directory.html");
+    const url = baseUrl + `?returnTab=${tab?.id || ""}&action=${action}`;
+    const tabs = await chrome.tabs.query({ currentWindow: true });
+    const toolTab = tabs.find(item => item.url?.startsWith(baseUrl));
+    // 放在最左側，避免工具頁插入「本頁往右」的連續履歷範圍。
+    if (toolTab) {
+      await chrome.tabs.move(toolTab.id, { index: 0 });
+      await chrome.tabs.update(toolTab.id, { url, active: true });
+    } else await chrome.tabs.create({ url, index: 0 });
+    return { ok: true };
+  }
+  return send(action === "combined" ? { type: "TOOLKIT_START_COMBINED_RIGHT" } : { cmd: action });
+}
+
 async function startPdf(cmd) {
   await saveSettings();
-  const response = await send({ cmd });
+  const response = await launchExport(cmd);
   if (!response?.ok) ui.pdfStatus.textContent = `啟動失敗：${response?.error || "未知錯誤"}`;
   await refreshStates();
 }
@@ -383,7 +401,7 @@ function bindActions() {
   ui.toggleExportPanel.addEventListener("click", () => togglePanel("exportPanel"));
   ui.startWorkflow.addEventListener("click", async () => {
     await saveSettings();
-    const response = await send({ type: "TOOLKIT_START_COMBINED_RIGHT" });
+    const response = await launchExport("combined");
     if (!response?.ok) {
       renderWorkflow({ phase: "error", error: response?.error || "無法啟動工作流。", total: 2 });
     }

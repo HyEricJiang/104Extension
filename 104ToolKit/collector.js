@@ -43,6 +43,7 @@ function logError(...args) {
 }
 
 function setBadge(text, color, title) {
+  if (globalThis.RecruitingWorkflow?.getState().running) return;
   chrome.action.setBadgeText({ text: text || "" });
   if (color) chrome.action.setBadgeBackgroundColor({ color });
   if (title) chrome.action.setTitle({ title });

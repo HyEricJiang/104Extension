@@ -9,7 +9,7 @@ const workflowSource = fs.readFileSync(
   "utf8"
 );
 
-function createHarness({ rows = ["王小明\tmail@example.com\t0900000000\tR001"] } = {}) {
+function createHarness({ permissionError = false, pdfFailure = false, rows = ["王小明\tmail@example.com\t0900000000\tR001"] } = {}) {
   const storage = {};
   const listeners = [];
   const calls = [];
@@ -21,7 +21,9 @@ function createHarness({ rows = ["王小明\tmail@example.com\t0900000000\tR001"
     setTimeout,
     clearTimeout,
     URL,
+    RecruitingOutputDirectory: { getTarget: async () => { calls.push(["permission"]); if (permissionError) throw Error("資料夾需要授權"); return null; } },
     chrome: {
+      action: { setBadgeText: async ({text}) => calls.push(["badge", text]), setBadgeBackgroundColor: async () => {}, setTitle: async () => {} },
       storage: {
         local: {
           async get(key) {
@@ -70,6 +72,7 @@ function createHarness({ rows = ["王小明\tmail@example.com\t0900000000\tR001"
       },
       async runDownloadRightBatch() {
         calls.push(["export", "right"]);
+        if (pdfFailure) { pdfState.exportSummary = { fail: 1 }; pdfState.lastMessage = "部分 PDF 匯出失敗"; }
       },
       requestStop() {
         pdfState.stopRequested = true;
@@ -130,4 +133,23 @@ test("沒有聯絡資料時不會繼續匯出 PDF", async () => {
   assert.equal(state.phase, "error");
   assert.match(state.error, /沒有取得可複製的聯絡資料/);
   assert.equal(harness.calls.some(([name]) => name === "export"), false);
+});
+
+
+test("資料夾尚未授權時不先複製，也不顯示 OK", async () => {
+  const h = createHarness({ permissionError: true });
+  await h.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
+  const state = await waitForWorkflowToSettle(h);
+  assert.equal(state.phase, "error");
+  assert.ok(!h.calls.some(([name]) => name === "collect" || name === "export"));
+  assert.ok(!h.calls.some(([name, text]) => name === "badge" && text === "OK"));
+});
+test("完成複製後仍顯示匯出進度，PDF 失敗不報完成", async () => {
+  const h = createHarness({ pdfFailure: true });
+  await h.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
+  const state = await waitForWorkflowToSettle(h);
+  assert.equal(state.phase, "error");
+  assert.match(state.error, /PDF 匯出失敗/);
+  assert.ok(h.calls.some(([name, text]) => name === "badge" && text === "2/2"));
+  assert.ok(!h.calls.some(([name, text]) => name === "badge" && text === "OK"));
 });

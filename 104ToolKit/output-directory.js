@@ -32,11 +32,14 @@
     const data = (await chrome.storage.local.get(META_KEY))[META_KEY];
     return data?.enabled ? { selected: true, name: data.name } : { selected: false, name: "瀏覽器預設下載位置" };
   }
+  async function getSavedHandle() {
+    return (await status()).selected ? storedHandle("get") : null;
+  }
   async function getTarget() {
     if (!(await status()).selected) return null;
-    const handle = await storedHandle("get");
+    const handle = await getSavedHandle();
     if (!handle || await handle.queryPermission({ mode: "readwrite" }) !== "granted") {
-      throw new Error("所選資料夾需要重新授權，請按「選擇資料夾」後重新選取。檔案尚未儲存。");
+      throw new Error("所選資料夾需要重新授權，請重新開始匯出並在工具頁授權原資料夾。檔案尚未儲存。");
     }
     return handle;
   }
@@ -71,7 +74,7 @@
     writes = task;
     return task;
   }
-  const api = Object.freeze({ set, status, getTarget, useDefault, writeFile });
+  const api = Object.freeze({ set, status, getSavedHandle, getTarget, useDefault, writeFile });
   globalThis.RecruitingOutputDirectory = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

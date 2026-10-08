@@ -17,6 +17,10 @@
 
   async function persistAndNotify(patch = {}) {
     Object.assign(state, patch);
+    const badge = state.running ? (state.phase === "exporting" ? "2/2" : "1/2") : state.phase === "done" ? "OK" : state.phase === "error" ? "ERR" : state.phase === "stopped" ? "STOP" : "";
+    await chrome.action.setBadgeText({ text: badge });
+    await chrome.action.setBadgeBackgroundColor({ color: state.phase === "error" ? "#ef4444" : state.phase === "done" ? "#22c55e" : "#4f8cff" });
+    await chrome.action.setTitle({ title: state.error || state.lastMessage });
     await chrome.storage.local.set({ [WORKFLOW_KEY]: publicState() });
     try {
       await chrome.runtime.sendMessage({
@@ -74,6 +78,8 @@
     });
 
     try {
+      // 先確認目的地，避免複製成功後才發現 PDF 無法儲存。
+      await globalThis.RecruitingOutputDirectory.getTarget();
       await globalThis.RecruitingCollector.startCollection("right");
       const collectorResult = await globalThis.RecruitingCollector.getState();
       if (state.stopRequested || collectorResult.stopRequested) {
@@ -110,6 +116,7 @@
         return;
       }
 
+      if (pdfResult.exportSummary?.fail > 0) throw new Error(pdfResult.lastMessage || "部分 PDF 匯出失敗，已完成檔案會保留。");
       await persistAndNotify({
         running: false,
         stopRequested: false,
