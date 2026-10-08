@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      5.0.3
-// @description  Scan, filter, label, score, and reorder 104 VIP resume cards with shared Google Sheet rules.
+// @version      5.0.7
+// @description  綜合 Java、C#/.NET、SA、QA 條件，掃描並呈現推薦、人工審核、排除及適合職位。
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
 // @grant        GM_openInTab
@@ -128,7 +128,6 @@
   let summaryNode;
   let progressFillNode;
   let progressLabelNode;
-  let roleSelectNode;
   let castingNode;
   let bodyNode;
   let headerNode;
@@ -195,7 +194,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.0</strong>
+          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.0.7</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;">待掃描</div>
@@ -208,14 +207,7 @@
           </div>
         </div>
         <span data-screening-status aria-live="polite" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;">準備就緒</span>
-        <select data-role aria-label="搜尋職缺" style="width:100%;padding:8px;margin-bottom:8px;font-size:${TYPE_SCALE.heading}px;font-weight:700;">
-          <option value="">請選擇本次篩選職缺</option>
-          <option value="java-programmer">Java 工程師</option>
-          <option value="csharp-dotnet-programmer">C#/.NET 工程師</option>
-          <option value="system-analyst">系統分析師 SA</option>
-          <option value="qa-engineer">軟體測試 QA</option>
-          <option value="project-manager">專案經理 PM</option>
-        </select>
+        <div data-screening-mode style="margin-bottom:8px;color:${UI.muted};font-size:${TYPE_SCALE.support}px;">綜合篩選 Java／C#／SA／QA</div>
         <div data-screening-casting aria-live="polite" style="display:none;align-items:center;justify-content:center;min-height:36px;margin-bottom:8px;padding:0 8px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.navySoft};color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;text-align:center;">正在詠唱篩選魔法 ヽ(́◕◞౪◟◕‵)ﾉ</div>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
           <button data-screening-start style="flex:1;height:36px;border:1px solid ${UI.navy};border-radius:8px;background:${UI.navy};color:#fff;font-weight:700;cursor:pointer;">掃描並依分數排序</button>
@@ -235,7 +227,6 @@
     summaryNode = panel.querySelector("[data-screening-summary]");
     progressFillNode = panel.querySelector("[data-screening-progress-fill]");
     progressLabelNode = panel.querySelector("[data-screening-progress-label]");
-    roleSelectNode = panel.querySelector("[data-role]");
     castingNode = panel.querySelector("[data-screening-casting]");
     startButton = panel.querySelector("[data-screening-start]");
     copyButton = panel.querySelector("[data-screening-copy]");
@@ -313,11 +304,8 @@
     setProgress(overallPercent, `第 ${stageIndex}/4 階段 · ${stageName} ${countLabel}（總完成 ${Math.round(overallPercent)}%）`);
   }
 
-  function setRoleSelectionLocked(locked) {
-    if (!roleSelectNode || !castingNode) return;
-    roleSelectNode.disabled = locked;
-    roleSelectNode.style.display = locked ? "none" : "block";
-    castingNode.style.display = locked ? "flex" : "none";
+  function setScanningIndicator(scanning) {
+    if (castingNode) castingNode.style.display = scanning ? "flex" : "none";
   }
 
   function setCollapsed(nextCollapsed) {
@@ -876,12 +864,12 @@
     return minimum + ((index * 97) % (spread + 1));
   }
 
-  function needsDetailEnrichment(roleId, role, card) {
+  function needsDetailEnrichment(card) {
     return ENABLE_DETAIL_ENRICHMENT && Boolean(card.profileUrl);
   }
 
-  async function enrichResumeDetails(roleId, role, cards) {
-    const targets = cards.filter((card) => needsDetailEnrichment(roleId, role, card));
+  async function enrichResumeDetails(cards) {
+    const targets = cards.filter((card) => needsDetailEnrichment(card));
     if (!targets.length) {
       setProgress(85, "第 2/4 階段 · 使用卡片資料（總完成 85%）");
       return { requested: 0, loaded: 0, failed: 0, disabled: !ENABLE_DETAIL_ENRICHMENT };
@@ -1322,7 +1310,6 @@
     return Number(match?.[1]?.replaceAll(",", "") || 0);
   }
 
-  function inferRoleId() { return panel?.querySelector("[data-role]")?.value || ""; }
 
   function extractCardMeta(card) {
     const jobLines = [...card.querySelectorAll(JOB_HISTORY_SELECTOR)].map(node => normalizeText(node.textContent));
@@ -1383,7 +1370,9 @@
     // 清除舊版曾保存的規則，新版不再下載它們。
     localStorage.removeItem(SHARED_RULES_CACHE_KEY);
     const response = await backendRequest({action:"health"}, true);
-    if (response.mode !== "private_backend") throw new Error("請先部署私有後端 v4.0.0。");
+    if (response.mode !== "private_backend" || response.screeningMode !== "comprehensive") {
+      throw new Error("後端尚未啟用四職位綜合篩選，請確認服務已更新至 v5.0.7 或更新版本。");
+    }
   }
 
   function backendRequest(input, health = false) {
@@ -1408,18 +1397,19 @@
     });
   }
 
-  async function rankCandidates(cards, roleId) {
+  async function rankCandidates(cards) {
     const all = [];
     setStageProgress(3, "後端評分", 0, cards.length, 85, 98);
     for (let offset = 0; offset < cards.length; offset += 25) {
       if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
       setStatus(`第 3/4 階段：後端評分中（已完成 ${offset}/${cards.length}）...`);
       const batch = cards.slice(offset, offset + 25);
-      const response = await backendRequest({action:"screen", roleId, cards:batch.map(card => {
+      const response = await backendRequest({action:"screen", cards:batch.map(card => {
         // 姓名與履歷連結保留於畫面；只送評估所需欄位。
         const {candidateName, profileUrl, ...evidence} = card;
         return evidence;
       })});
+      if (response.screeningMode !== "comprehensive") throw new Error("後端未回傳綜合篩選結果，請確認服務版本。");
       if (!Array.isArray(response.results) || response.results.length !== batch.length) throw new Error("後端回傳筆數不符");
       response.results.forEach(result => {
         const original = batch.find(card => card.resumeCode === result.resumeCode);
@@ -2154,12 +2144,7 @@
     const cardsByCode = new Map();
 
     try {
-      const roleId = inferRoleId();
-      const role = Boolean(roleId);
-      if (!role) {
-        throw new Error("請先在面板選擇要篩選的職缺，再開始掃描。");
-      }
-      setRoleSelectionLocked(true);
+      setScanningIndicator(true);
       await loadSharedRules();
       if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
       else setStatus("共用規則已就緒，開始掃描卡片...");
@@ -2203,12 +2188,12 @@
       collapseSkippedCards();
       const cards = [...cardsByCode.values()];
       setStatus(`初篩完成 ${cards.length} 筆，準備後端評分...`);
-      const enrichment = await enrichResumeDetails(roleId, role, cards);
+      const enrichment = await enrichResumeDetails(cards);
       if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
       if (enrichment.requested) {
         setSummary(`詳情補強：成功 ${enrichment.loaded} · 待確認 ${enrichment.failed}`);
       }
-      const ranking = await rankCandidates(cards, roleId);
+      const ranking = await rankCandidates(cards);
       setStatus("第 4/4 階段：正在依分數排序並更新畫面...");
       setStageProgress(4, "排序呈現", 0, 1, 98, 100);
       const scoredItems = ranking.allResults;
@@ -2250,14 +2235,14 @@
       startButton.textContent = "掃描並依分數排序";
       startButton.style.background = UI.navy;
       startButton.style.borderColor = UI.navy;
-      setRoleSelectionLocked(false);
+      setScanningIndicator(false);
       collapseSkippedCards();
       updateQuickOpenButton();
     }
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({rankCandidates, loadSharedRules, mountPanel, setScanningIndicator, desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
     return;
   }
 
