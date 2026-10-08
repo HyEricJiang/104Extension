@@ -8,8 +8,6 @@
     wronglyExcludedShouldRecommend: "不應排除應推薦"
   });
   const STORAGE_PREFIX = "resume_training_label_v1:";
-  let lastBundle = null;
-  const LAST_EXPORT = "resume_training_last_export_v1";
 
   function identity(info) {
     if (info?.idno) return `search:${encodeURIComponent(info.idno)}`;
@@ -31,39 +29,8 @@
     return record;
   }
   async function remove(info) {
-    // 只刪除這份履歷的標記，不影響其他履歷或已匯出的分類清單。
+    // 只刪除這份履歷的標記，不影響其他履歷或已匯出的 PDF。
     await chrome.storage.local.remove(STORAGE_PREFIX + identity(info));
-  }
-  function csvCell(value) {
-    let text = String(value ?? "");
-    if (/^[\s]*[=+@-]|^[\t\r\n]/.test(text)) text = "'" + text;
-    return '"' + text.replace(/"/g, '""') + '"';
-  }
-  function toCsv(rows) {
-    const columns = ["pdfFilename", "pdfPath", "filenameVerified", "jobTitle", "trainingLabel", "resumeKey", "labelUpdatedAt", "exportedAt"];
-    return "\uFEFF" + [columns.map(csvCell).join(","), ...rows.map(row => columns.map(key => csvCell(row[key])).join(","))].join("\r\n");
-  }
-  async function downloadReport(rows, subdir = "", remember = true, outputTarget = undefined) {
-    if (!rows.length) throw new Error("尚無已完成的 PDF 可匯出分類清單。");
-    if (remember) {
-      lastBundle = { rows, subdir };
-      try { await chrome.storage.local.set({ [LAST_EXPORT]: lastBundle }); }
-      catch (_) { console.warn("[104 招募工作台] 分類清單僅暫存在背景服務，無法持久保存。"); }
-    }
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const name = `training-labels_${stamp}.csv`;
-    const target = outputTarget === undefined ? await globalThis.RecruitingOutputDirectory.getTarget() : outputTarget;
-    if (target) {
-      const result = await globalThis.RecruitingOutputDirectory.writeFile(target, name, new TextEncoder().encode(toCsv(rows)));
-      return { ok: true, count: rows.length, filename: result.path, directWrite: true };
-    }
-    const filename = `${subdir}${name}`;
-    await chrome.downloads.download({ url: "data:text/csv;charset=utf-8," + encodeURIComponent(toCsv(rows)), filename, conflictAction: "uniquify", saveAs: false });
-    return { ok: true, count: rows.length, filename };
-  }
-  async function downloadLastReport() {
-    const bundle = lastBundle || (await chrome.storage.local.get(LAST_EXPORT))[LAST_EXPORT];
-    return downloadReport(bundle?.rows || [], bundle?.subdir || "", false);
   }
 function parseResumeInfoFromUrl(url) {
   try {
@@ -84,7 +51,7 @@ function parseResumeInfoFromUrl(url) {
     return null;
   } catch (_) { return null; }
 }
-  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, remove, toCsv, downloadReport, downloadLastReport });
+  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, remove });
   globalThis.ResumeTrainingLabels = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

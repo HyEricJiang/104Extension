@@ -59,7 +59,7 @@
 
       <div class="settings-body">
         <label class="field">
-          <span>檔名前綴模式</span>
+          <span>未加入群組時的前綴模式</span>
           <select id="prefixMode">
             <option value="manual">手動輸入前綴</option>
             <option value="tabGroup">使用目前分頁群組名稱</option>
@@ -80,7 +80,7 @@
           <span>存放資料夾</span>
           <div id="outputLocation" class="detail-status" aria-live="polite">讀取中…</div>
           <button id="chooseOutputDirectory" type="button" class="button button-secondary button-block">選擇資料夾</button>
-          <p class="helper-text">PDF 與分類 CSV 共用此位置，不需輸入路徑。</p>
+          <p class="helper-text">一般履歷與 AI 訓練資料共用此位置，不需輸入路徑。</p>
         </div>
         <div class="field-grid">
           <label class="field">
@@ -95,6 +95,7 @@
         <div class="preview">
           <span>檔名預覽</span>
           <strong id="filenamePreview">王小明.pdf</strong>
+          <p id="trainingFilenamePreview" class="helper-text" hidden></p>
           <small id="groupHint">正在讀取目前分頁群組…</small>
         </div>
         <button id="saveSettings" class="button button-secondary button-block">儲存設定</button>
@@ -110,9 +111,7 @@
         <span class="scope-badge">本頁往右</span>
       </div>
       <p class="section-copy">先整理聯絡資料並複製，再依照上方設定匯出所有履歷。</p>
-      <p class="helper-text">PDF 檔名沿用職缺設定；完成後另外下載訓練分類 CSV，未標記的履歷列為「未分類」。</p>
-      <button id="downloadTrainingReport" type="button" class="button button-secondary button-block">重新下載分類清單</button>
-      <p id="trainingReportStatus" class="status-message" aria-live="polite"></p>
+      <p class="helper-text">每份履歷依 Chrome 群組命名；有訓練標籤時，另存一份「AI訓練資料_標籤_姓名.pdf」。不需提供分類清單。</p>
       <button id="startWorkflow" class="button button-primary button-block">
         <span>開始複製並匯出</span>
         <span aria-hidden="true">→</span>

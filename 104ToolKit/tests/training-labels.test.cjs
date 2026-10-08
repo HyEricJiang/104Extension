@@ -21,34 +21,7 @@ test('未標記與未知分類不會被誤認為有效資料',async()=>{
  assert.equal(await api.read({idno:'C'}),null);
  await assert.rejects(api.save({idno:'C'},'__proto__'),/不支援/);
 });
-test('CSV 含 BOM、完整引號轉義及公式注入防護',()=>{
- const csv=api.toCsv([{pdfFilename:'="危險",\n.pdf',trainingLabel:'人工審核但需要推薦'}]);
- assert.ok(csv.startsWith('\uFEFF'));
- assert.ok(csv.includes('"\'=\"\"危險\"\",\n.pdf"'));
- assert.ok(csv.includes('人工審核但需要推薦'));
-});
-test('分類清單保存可重下載；空清單不產生誤導檔案',async()=>{
- const rows=[{pdfFilename:'Jr.Java PG_Test.pdf',jobTitle:'Jr.Java PG',trainingLabel:'未分類'}];
- await api.downloadReport(rows,'104履歷下載區/');
- await api.downloadLastReport();
- assert.equal(downloads.length,2);
- assert.equal(downloads[1].url,downloads[0].url);
- assert.ok(downloads[0].filename.startsWith('104履歷下載區/training-labels_'));
- await assert.rejects(api.downloadReport([]),/尚無/);
-});
-
-test('分類清單下載失敗後可重試最新清單，不誤下載上一批',async()=>{
- const rows=[{pdfFilename:'latest.pdf',resumeKey:'search:latest',trainingLabel:'不應排除應推薦'}];
- chrome.downloads.download=async()=>{throw Error('下載遭拒');};
- await assert.rejects(api.downloadReport(rows),/下載遭拒/);
- let retried;
- chrome.downloads.download=async options=>{retried=options;return 3;};
- await api.downloadLastReport();
- assert.ok(decodeURIComponent(retried.url).includes('latest.pdf'));
- assert.ok(decodeURIComponent(retried.url).includes('不應排除應推薦'));
-});
-
-test('移除只清除此履歷，重複移除安全且不影響其他標記與匯出清單',async()=>{
+test('移除只清除此履歷，重複移除安全且不影響其他標記',async()=>{
  await api.save({idno:'REMOVE_A'},'reviewedShouldRecommend');
  await api.save({idno:'REMOVE_B'},'reviewedShouldExclude');
  const exportsBefore=JSON.stringify(stored.resume_training_last_export_v1);

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "104 招募工作台",
-  "version": "1.4.0",
-  "description": "獨立保存履歷訓練分類、管理職缺群組、複製資料與匯出 PDF 及分類 CSV。",
+  "version": "1.5.0",
+  "description": "獨立保存履歷訓練分類、管理職缺群組、複製資料與匯出邀約履歷與含標籤的 AI 訓練 PDF。",
   "permissions": [
     "tabs",
     "tabGroups",

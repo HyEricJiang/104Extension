@@ -270,8 +270,7 @@ async function runIdnoExportJob(items, jobTitle) {
   state.lastMessage = `開始：${jobTitle}`;
   badgeIdle(`準備：${jobTitle}`);
 
-  const trainingRows = [];
-  const report = { ok: 0, fail: 0, stopped: false, failures: [] };
+  const report = { ok: 0, fail: 0, regularFiles: 0, trainingFiles: 0, stopped: false, failures: [] };
 
   for (let i = 0; i < items.length; i++) {
     if (state.stopRequested) {
@@ -284,6 +283,7 @@ async function runIdnoExportJob(items, jobTitle) {
     const idno = info?.idno || "";
     const snapshotId = info?.snapshotId || "";
     let previewTabId = null;
+    let regularSaved = false;
 
     updateProgress(i + 1, items.length, `開始處理第 ${i + 1}/${items.length} 份`);
     badgeRunning(state.currentIndex, state.total, `${jobTitle}：${state.currentIndex}/${state.total}`);
@@ -412,22 +412,20 @@ async function runIdnoExportJob(items, jobTitle) {
       if (!data) throw new Error("printToPDF 沒有回傳資料。");
 
       const pdfBytes = base64ToUint8Array(data);
-      const downloadResult = await downloadPdfBytes(pdfBytes, filename, outputTarget);
-
-      state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}`;
-      report.ok++;
-      // 以 Chrome 完成下載後的實際名稱建立對照，涵蓋重名自動加序號。
-      let actualPath = downloadResult?.directWrite ? downloadResult.path : filename;
-      let filenameVerified = Boolean(downloadResult?.directWrite);
-      try {
-        const downloaded = downloadResult?.directWrite ? null : (await chrome.downloads.search({ id: downloadResult }))[0];
-        if (downloaded?.filename) { actualPath = downloaded.filename; filenameVerified = true; }
+      await downloadPdfBytes(pdfBytes, filename, outputTarget);
+      regularSaved = true;
+      report.regularFiles++;
+      // 同一份 PDF 同時服務邀約與訓練，避免再次讀取履歷造成內容不一致。
+      if (label) {
+        const trainingFilename = buildFilename("AI訓練資料", sanitizeFilename(label.label), safeName);
+        const trainingPath = subdir ? normalizeSubdir(subdir) + trainingFilename : trainingFilename;
+        await downloadPdfBytes(pdfBytes, trainingPath, outputTarget);
+        report.trainingFiles++;
       }
-      catch (_) { /* 無法讀取下載記錄時保留原請求檔名。 */ }
-      const actualName = actualPath.split(/[\\/]/).pop();
-      trainingRows.push({ pdfFilename: actualName, pdfPath: actualPath, filenameVerified, jobTitle: info.sourceTabGroupTitle || "", trainingLabel: label?.label || "未分類", resumeKey: globalThis.ResumeTrainingLabels.identity(info), labelUpdatedAt: label?.updatedAt || "", exportedAt: new Date().toISOString() });
+      state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}${label ? "（含 AI 訓練版本）" : ""}`;
+      report.ok++;
     } catch (error) {
-      const errMessage = error?.message || String(error);
+      const errMessage = (regularSaved ? "一般履歷已保留，AI 訓練資料儲存失敗：" : "") + (error?.message || String(error));
       report.fail++;
       report.failures.push({
         index: `${state.currentIndex}/${state.total}`,
@@ -446,16 +444,6 @@ async function runIdnoExportJob(items, jobTitle) {
     }
   }
 
-  let trainingReportError = "";
-  if (trainingRows.length) {
-    try {
-      const subdir = (state.settings.subdir || "").trim();
-      await globalThis.ResumeTrainingLabels.downloadReport(trainingRows, subdir ? normalizeSubdir(subdir) : "", true, outputTarget);
-    } catch (error) {
-      trainingReportError = error?.message || String(error);
-      logError("分類清單下載失敗，PDF 已保留。", { error: trainingReportError });
-    }
-  }
   state.running = false;
   state.stopRequested = false;
 
@@ -469,8 +457,8 @@ async function runIdnoExportJob(items, jobTitle) {
     state.lastMessage = `完成：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`;
     badgeErrThenReset(`完成：成功 ${report.ok}/${items.length}，失敗 ${report.fail}`);
   }
-  if (trainingReportError) state.lastMessage += "；分類清單未下載，請按「重新下載分類清單」重試。";
-  else if (trainingRows.length) state.lastMessage += `；分類清單${outputTarget ? "已儲存" : "已提交下載"}（${trainingRows.length} 筆）`;
+  if (report.failures.some(f => f.error.startsWith("一般履歷已保留"))) state.lastMessage += "；一般履歷已保留，部分 AI 訓練資料儲存失敗，請重試";
+  state.lastMessage += `；一般履歷 ${report.regularFiles} 份，AI 訓練資料 ${report.trainingFiles} 份`;
 }
 
 async function getActiveTab() {
@@ -502,7 +490,9 @@ async function resolveFilenamePrefix(info) {
   const mode = String(state.settings.filenamePrefixMode || "manual").trim();
   const manualPrefix = sanitizeFilename(String(state.settings.filenamePrefix || "").trim());
   const groupPrefix = sanitizeFilename(String(info?.sourceTabGroupTitle || "").trim());
-  if (mode === "tabGroup") return groupPrefix || manualPrefix;
+  // 有職缺群組時優先依群組命名；未分組才沿用前綴設定。
+  if (groupPrefix) return groupPrefix;
+  if (mode === "tabGroup") return manualPrefix;
   if (mode === "none") return "";
   return manualPrefix;
 }

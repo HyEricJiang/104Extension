@@ -32,6 +32,7 @@ let jobsRunning = false;
 let classificationBusy = false;
 let canClassify = false;
 let hasTrainingLabel = false;
+let currentTrainingLabel = "";
 let canGroupJob = false;
 
 function updateClassificationAvailability() {
@@ -60,7 +61,8 @@ async function refreshClassification() {
   const result = await sendClassification({ type: "TOOLKIT_GET_CLASSIFIER_STATE" });
   if (!result?.ok) throw new Error(result?.error || "無法讀取分類。");
   canClassify = result.canClassify;
-  hasTrainingLabel = Boolean(result.trainingLabel);
+  currentTrainingLabel = result.trainingLabel || "";
+  hasTrainingLabel = Boolean(currentTrainingLabel);
   canGroupJob = result.canGroupJob;
   byId("jobCurrentGroup").textContent = result.groupTitle || "尚未分類";
   const select = byId("jobGroupSelect");
@@ -296,9 +298,9 @@ function buildPreviewFilename() {
   const mode = byId("prefixMode").value;
   const manualPrefix = byId("filenamePrefix").value.trim();
   const suffix = byId("filenameSuffix").value.trim();
-  const prefix = mode === "tabGroup"
-    ? (groupInfo.title || manualPrefix)
-    : (mode === "manual" ? manualPrefix : "");
+  const prefix = groupInfo.title || (mode === "none" ? "" : manualPrefix);
+  byId("trainingFilenamePreview").hidden = !currentTrainingLabel;
+  byId("trainingFilenamePreview").textContent = currentTrainingLabel ? `AI訓練資料_${currentTrainingLabel}_王小明.pdf` : "";
   byId("filenamePreview").textContent = [prefix, "王小明", suffix].filter(Boolean).join("_") + ".pdf";
   byId("groupHint").textContent = groupInfo.hasGroup
     ? `目前群組：${groupInfo.title}`
@@ -361,16 +363,6 @@ function bindActions() {
     } catch (error) { byId("outputLocation").textContent = `無法開啟資料夾設定：${errorText(error)}`; }
   });
   byId("removeTrainingLabel").addEventListener("click", removeCurrentTrainingLabel);
-  byId("downloadTrainingReport").addEventListener("click", async () => {
-    const button = byId("downloadTrainingReport");
-    button.disabled = true;
-    try {
-      const result = await sendClassification({ type: "TOOLKIT_DOWNLOAD_TRAINING_REPORT" });
-      if (!result?.ok) throw new Error(result?.error || "分類清單下載失敗。");
-      byId("trainingReportStatus").textContent = `${result.directWrite ? "已儲存" : "已提交下載"}：${result.count} 筆分類紀錄。`;
-    } catch (error) { byId("trainingReportStatus").textContent = errorText(error); }
-    finally { button.disabled = false; }
-  });
   byId("jobGroupSelect").addEventListener("change", updateClassificationAvailability);
   byId("addJobGroup").addEventListener("click", addCurrentToJobGroup);
   document.querySelectorAll(".classification-button").forEach(button => {
