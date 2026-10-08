@@ -14,7 +14,7 @@ function loadWorker() {
     console, URL, setTimeout, clearTimeout, setInterval, clearInterval,
     chrome: {
       action: actions,
-      storage: {local: {get: async key => ({[key]: storage[key]}), set: async value => Object.assign(storage,value)}},
+      storage: {local: {get: async key => ({[key]: storage[key]}), set: async value => Object.assign(storage,value), remove: async key => {delete storage[key];}}},
       runtime: {
         onInstalled: {addListener: () => {}},
         onMessage: {addListener: fn => messages.push(fn)},
@@ -103,4 +103,15 @@ test('職缺分組訊息透過完整背景服務的專用連線執行',async()=>
   assert.equal(result.ok,true);
   assert.equal(result.groupTitle,'Sr.QA');
   assert.equal(result.created,true);
+});
+
+test('專用連線移除標籤後恢復未標記，不呼叫分組 API',async()=>{
+ const worker=loadWorker();
+ worker.context.chrome.tabs.group=async()=>{throw Error('不應移動分頁');};
+ worker.context.chrome.tabGroups.update=async()=>{throw Error('不應修改群組');};
+ await request(worker,{type:'CLASSIFY_CURRENT_TAB',categoryId:'reviewedShouldRecommend'});
+ const removed=await request(worker,{type:'TOOLKIT_REMOVE_TRAINING_LABEL'});
+ assert.equal(removed.ok,true);
+ const state=await request(worker,{type:'TOOLKIT_GET_CLASSIFIER_STATE'});
+ assert.equal(state.trainingLabel,'');
 });

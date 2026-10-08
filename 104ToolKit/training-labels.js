@@ -30,6 +30,10 @@
     await chrome.storage.local.set({ [STORAGE_PREFIX + resumeKey]: record });
     return record;
   }
+  async function remove(info) {
+    // 只刪除這份履歷的標記，不影響其他履歷或已匯出的分類清單。
+    await chrome.storage.local.remove(STORAGE_PREFIX + identity(info));
+  }
   function csvCell(value) {
     let text = String(value ?? "");
     if (/^[\s]*[=+@-]|^[\t\r\n]/.test(text)) text = "'" + text;
@@ -74,7 +78,7 @@ function parseResumeInfoFromUrl(url) {
     return null;
   } catch (_) { return null; }
 }
-  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, toCsv, downloadReport, downloadLastReport });
+  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, remove, toCsv, downloadReport, downloadLastReport });
   globalThis.ResumeTrainingLabels = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

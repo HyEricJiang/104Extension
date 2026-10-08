@@ -3,7 +3,7 @@ const test = require("node:test");
 let stored = {};
 global.chrome = {
   runtime: { onConnect: { addListener() {} }, onMessage: { addListener() {} } },
-  storage: { local: { get: async key => ({ [key]: stored[key] }), set: async value => Object.assign(stored, value) } },
+  storage: { local: { get: async key => ({ [key]: stored[key] }), set: async value => Object.assign(stored, value), remove: async key => { delete stored[key]; } } },
   tabGroups: {}, tabs: {}
 };
 global.ResumeTrainingLabels = require("../training-labels.js");

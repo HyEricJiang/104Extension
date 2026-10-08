@@ -141,6 +141,12 @@ async function handleMessage(message) {
     await ensureGroupingIdle();
     return moveTabToGroup(tab, { title: message.groupTitle, color: "grey" }, true);
   }
+  if (message.type === "TOOLKIT_REMOVE_TRAINING_LABEL") {
+    const info = await getResumeInfo(tab);
+    if (!info) throw new Error("無法辨識這份履歷，請開啟完整履歷頁再移除標籤。");
+    await globalThis.ResumeTrainingLabels.remove(info);
+    return { ok: true, trainingLabel: "" };
+  }
   if (!isResumeTab(tab)) throw new Error("請先切換到 104 VIP 履歷頁再下標籤。");
   return classifyTab(tab, message.categoryId);
 }
@@ -159,7 +165,7 @@ async function ensureGroupingIdle() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_DOWNLOAD_TRAINING_REPORT"].includes(message?.type)) return false;
+  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_DOWNLOAD_TRAINING_REPORT", "TOOLKIT_REMOVE_TRAINING_LABEL"].includes(message?.type)) return false;
   handleMessage(message).then(sendResponse).catch((error) => {
     console.error("[104 招募工作台] 分類操作失敗", { message: error.message });
     sendResponse({ ok: false, error: error.message || "分類失敗，請重試。" });
@@ -171,7 +177,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "toolkit-classifier") return;
   port.onMessage.addListener((message) => {
-    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_DOWNLOAD_TRAINING_REPORT"].includes(message?.type)) {
+    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_DOWNLOAD_TRAINING_REPORT", "TOOLKIT_REMOVE_TRAINING_LABEL"].includes(message?.type)) {
       port.postMessage({ ok: false, error: "不支援這個分類操作。" });
       return;
     }

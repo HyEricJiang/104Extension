@@ -2,7 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const api=require('../training-labels.js');
 let stored={};const downloads=[];
-global.chrome={storage:{local:{get:async key=>({[key]:stored[key]}),set:async value=>Object.assign(stored,value)}},downloads:{download:async opts=>{downloads.push(opts);return 1;}}};
+global.chrome={storage:{local:{get:async key=>({[key]:stored[key]}),set:async value=>Object.assign(stored,value),remove:async key=>{delete stored[key];}}},downloads:{download:async opts=>{downloads.push(opts);return 1;}}};
 test('搜尋頁與預覽頁的同一履歷使用同一識別；不同企業快照不混用',()=>{
  const a=api.parseResumeInfoFromUrl('https://vip.104.com.tw/search/SearchResumeMaster?idno=A');
  const b=api.parseResumeInfoFromUrl('https://vip.104.com.tw/ResumeTools/resumePreview?pageSource=search&searchEngineIdNos=A');
@@ -45,4 +45,15 @@ test('分類清單下載失敗後可重試最新清單，不誤下載上一批',
  await api.downloadLastReport();
  assert.ok(decodeURIComponent(retried.url).includes('latest.pdf'));
  assert.ok(decodeURIComponent(retried.url).includes('不應排除應推薦'));
+});
+
+test('移除只清除此履歷，重複移除安全且不影響其他標記與匯出清單',async()=>{
+ await api.save({idno:'REMOVE_A'},'reviewedShouldRecommend');
+ await api.save({idno:'REMOVE_B'},'reviewedShouldExclude');
+ const exportsBefore=JSON.stringify(stored.resume_training_last_export_v1);
+ await api.remove({idno:'REMOVE_A'});
+ await api.remove({idno:'REMOVE_A'});
+ assert.equal(await api.read({idno:'REMOVE_A'}),null);
+ assert.equal((await api.read({idno:'REMOVE_B'})).label,'人工審核但應該排除');
+ assert.equal(JSON.stringify(stored.resume_training_last_export_v1),exportsBefore);
 });

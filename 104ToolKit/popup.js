@@ -30,12 +30,14 @@ let workflowRunning = false;
 let jobsRunning = false;
 let classificationBusy = false;
 let canClassify = false;
+let hasTrainingLabel = false;
 let canGroupJob = false;
 
 function updateClassificationAvailability() {
   document.querySelectorAll(".classification-button").forEach(button => {
     button.disabled = classificationBusy || !canClassify;
   });
+  byId("removeTrainingLabel").disabled = classificationBusy || !canClassify || !hasTrainingLabel;
   [ui.startWorkflow, ui.copyCurrent, ui.copyRight, ui.downloadCurrent, ui.downloadRight].forEach(button => {
     button.disabled = jobsRunning || classificationBusy;
   });
@@ -57,6 +59,7 @@ async function refreshClassification() {
   const result = await sendClassification({ type: "TOOLKIT_GET_CLASSIFIER_STATE" });
   if (!result?.ok) throw new Error(result?.error || "無法讀取分類。");
   canClassify = result.canClassify;
+  hasTrainingLabel = Boolean(result.trainingLabel);
   canGroupJob = result.canGroupJob;
   byId("jobCurrentGroup").textContent = result.groupTitle || "尚未分類";
   const select = byId("jobGroupSelect");
@@ -94,6 +97,24 @@ async function classifyCurrent(categoryId) {
     byId("classificationStatus").textContent = `已保存「${result.trainingLabel}」；職缺群組保持原設定。`;
   } catch (error) {
     byId("classificationStatus").textContent = `分類失敗：${errorText(error)}`;
+  } finally {
+    classificationBusy = false;
+    updateClassificationAvailability();
+  }
+}
+
+async function removeCurrentTrainingLabel() {
+  if (classificationBusy || !canClassify || !hasTrainingLabel) return;
+  classificationBusy = true;
+  updateClassificationAvailability();
+  byId("classificationStatus").textContent = "正在移除此履歷的訓練標籤…";
+  try {
+    const result = await sendClassification({ type: "TOOLKIT_REMOVE_TRAINING_LABEL" });
+    if (!result?.ok) throw new Error(result?.error || "移除標籤失敗。");
+    await refreshClassification();
+    byId("classificationStatus").textContent = "已移除標籤；此履歷恢復為尚未標記，職缺群組保持原設定。";
+  } catch (error) {
+    byId("classificationStatus").textContent = `移除失敗：${errorText(error)}`;
   } finally {
     classificationBusy = false;
     updateClassificationAvailability();
@@ -330,6 +351,7 @@ async function startPdf(cmd) {
 }
 
 function bindActions() {
+  byId("removeTrainingLabel").addEventListener("click", removeCurrentTrainingLabel);
   byId("downloadTrainingReport").addEventListener("click", async () => {
     const button = byId("downloadTrainingReport");
     button.disabled = true;
