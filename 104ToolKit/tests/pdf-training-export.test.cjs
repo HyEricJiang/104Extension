@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function harness({failSecond=false,stopAfterFirst=false}={}) {
+function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG"}={}) {
  const stored={settings:{subdir:'104履歷下載區/',filenamePrefixMode:'tabGroup',firstWait:0,nextWait:0}};
  const events=new Set();const downloads=[];let nextTab=100;
  const noopEvent={addListener(){},removeListener(){}};
@@ -16,7 +16,7 @@ function harness({failSecond=false,stopAfterFirst=false}={}) {
    storage:{local:{get:async key=>({[key]:stored[key]}),set:async values=>Object.assign(stored,values)}},
    tabs:{query:async()=>[1,2,3].map(id=>({id,active:id===1,index:id-1,groupId:40,url:`https://vip.104.com.tw/search/SearchResumeMaster?idno=TEST${id}`})),
     create:async()=>({id:++nextTab}),get:async()=>({status:'complete'}),remove:async()=>{},onUpdated:noopEvent,onRemoved:noopEvent},
-   tabGroups:{get:async()=>({title:'Jr.Java PG'})},
+   tabGroups:{get:async()=>({title:groupTitle})},
    scripting:{executeScript:async opts=>{
     if(opts.func.toString().includes('new Promise'))return[{result:{success:true}}];
     if(opts.args)return[{result:failSecond&&opts.target.tabId===102?'':'Test'}];
@@ -35,7 +35,7 @@ function harness({failSecond=false,stopAfterFirst=false}={}) {
      });
      return id;
     },
-    search:async({id})=>[{filename:`/Downloads/104履歷下載區/Jr.Java PG_Test (${id}).pdf`}]
+    search:async({id})=>[{filename:`/Downloads/104履歷下載區/${groupTitle}_Test (${id}).pdf`}]
    }
   }});
  const root=path.join(__dirname,'..');
@@ -66,4 +66,16 @@ test('停止匯出只將已完成的 PDF 列入分類 CSV',async()=>{
  assert.ok(csv.includes('search:TEST1'));
  assert.ok(!csv.includes('search:TEST2'));
  assert.equal(downloads.filter(d=>d.url.startsWith('data:application/pdf')).length,1);
+});
+
+test('不合適群組仍可下載全部 PDF 並納入訓練分類 CSV',async()=>{
+ const {context,downloads}=harness({groupTitle:'不合適'});
+ await context.RecruitingPdfExporter.runDownloadRightBatch();
+ const pdfs=downloads.filter(d=>d.url.startsWith('data:application/pdf'));
+ assert.equal(pdfs.length,3);
+ assert.ok(pdfs.every(d=>d.filename==='104履歷下載區/不合適_Test.pdf'));
+ const csv=decodeURIComponent(downloads.find(d=>d.url.startsWith('data:text/csv')).url.split(',').slice(1).join(','));
+ assert.ok(csv.includes('不合適_Test (1).pdf'));
+ assert.ok(csv.includes('"不合適","未分類"'));
+ assert.ok(csv.includes('search:TEST3'));
 });

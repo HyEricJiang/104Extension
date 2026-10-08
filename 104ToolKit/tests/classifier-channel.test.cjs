@@ -99,9 +99,9 @@ test('分類服務沒有回覆時，會逾時並顯示可操作提示',async()=>
 });
 
 test('職缺分組訊息透過完整背景服務的專用連線執行',async()=>{
-  const result=await request(loadWorker(),{type:'TOOLKIT_GROUP_JOB_TAB',groupTitle:'Sr.QA'});
+  const result=await request(loadWorker(),{type:'TOOLKIT_GROUP_JOB_TAB',groupTitle:'不合適'});
   assert.equal(result.ok,true);
-  assert.equal(result.groupTitle,'Sr.QA');
+  assert.equal(result.groupTitle,'不合適');
   assert.equal(result.created,true);
 });
 

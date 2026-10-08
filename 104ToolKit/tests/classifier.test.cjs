@@ -31,8 +31,8 @@ test("無法辨識履歷時拒絕保存，不能用暫時分頁 ID 取代", asyn
 test("無關網域不能取得履歷訓練標記",()=>{
   assert.equal(isResumeTab({url:"https://example.com/search/SearchResumeMaster?idno=1"}),false);
 });
-test("八個職缺使用固定選單，不接受任意群組名稱", () => {
-  assert.deepEqual(CONFIG.jobGroups, ["Jr.Net PG", "Sr.Net PG", "Jr.Java PG", "Sr.Java PG", "Jr.QA", "Sr.QA", "SA", "PM"]);
+test("九個群組使用固定選單，不接受任意群組名稱", () => {
+  assert.deepEqual(CONFIG.jobGroups, ["Jr.Net PG", "Sr.Net PG", "Jr.Java PG", "Sr.Java PG", "Jr.QA", "Sr.QA", "SA", "PM", "不合適"]);
 });
 
 test("職缺分組可處理目前網頁，加入既有群組並保留原顏色", async () => {

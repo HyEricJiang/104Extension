@@ -7,7 +7,7 @@
 
 const CONFIG = Object.freeze({
   messageType: "CLASSIFY_CURRENT_TAB",
-  jobGroups: Object.freeze(["Jr.Net PG", "Sr.Net PG", "Jr.Java PG", "Sr.Java PG", "Jr.QA", "Sr.QA", "SA", "PM"]),
+  jobGroups: Object.freeze(["Jr.Net PG", "Sr.Net PG", "Jr.Java PG", "Sr.Java PG", "Jr.QA", "Sr.QA", "SA", "PM", "不合適"]),
   groups: Object.freeze(Object.fromEntries(Object.entries(globalThis.ResumeTrainingLabels.CATEGORIES).map(([id, title]) => [id, Object.freeze({ title })]))),
 });
 
