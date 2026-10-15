@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      5.0.7
+// @version      5.0.8
 // @description  綜合 Java、C#/.NET、SA、QA 條件，掃描並呈現推薦、人工審核、排除及適合職位。
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -757,12 +757,16 @@
       const companyName = normalizeText(node.querySelector('.experience-list-list__companyName')?.textContent);
       const jobCategory = normalizeText(node.querySelector('.experience-list-list__other-info')?.textContent);
       const duration = normalizeText(node.querySelector('.experience-list-list__duration')?.textContent);
+      // 僅讀該筆工作明列產業,不從工作內容的客戶名稱推測。
+      const industryCategory = labelledSectionText(node, /^產業類別(?:[：:\s]|$)/)
+        .replace(/^產業類別[：:\s]*/, '')
+        .split(/職務類別|公司規模|管理責任|工作內容|工作技能/)[0].trim();
       const content = normalizeText(node.querySelector('.experience-list-list__description')?.textContent);
       const tags = uniqueList([...node.querySelectorAll('span')]
         .map((tagNode) => normalizeText(tagNode.textContent))
         .filter((text) => text.startsWith('#')));
       const fullText = normalizeText([jobName, companyName, jobCategory, duration, content, tags.join(' ')].filter(Boolean).join(' | '));
-      return { jobName, companyName, jobCategory, duration, content, tags, fullText };
+      return { jobName, companyName, jobCategory, industryCategory, duration, content, tags, fullText };
     }).filter((entry) => entry.fullText);
     const experienceEntries = experienceRecords.map((entry) => entry.fullText);
     // 保留空字串，確保第 N 筆工作內容永遠對應第 N 筆工作，不因去重或過濾而錯位。
@@ -777,6 +781,7 @@
       status: coreSections.length ? "loaded" : "partial",
       currentCompanyName,
       currentJobTitle,
+      currentIndustryCategory: experienceRecords[0]?.industryCategory || '',
       schoolName,
       majorName,
       desiredTitles,
