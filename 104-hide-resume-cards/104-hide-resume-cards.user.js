@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      5.1.0
+// @version      5.1.1
 // @description  綜合 Java、C#/.NET、SA、QA 條件，掃描並呈現推薦、人工審核、排除及適合職位。
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -153,6 +153,7 @@
   let isPrintHidden = false;
   let scanCancellationRequested = false;
   let activeScanClock = null;
+  let latestCollectionOutcome = null;
   let tooltipNode;
   let activeTooltipTarget;
   const cardTextCache = new WeakMap();
@@ -198,7 +199,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.1.0</strong>
+          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.1.1</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;">待掃描</div>
@@ -1538,19 +1539,42 @@
     return [processedCount(cardsByCode), currentCodeSignature(), documentHeight(), includeScroll ? window.scrollY : ''].join(':');
   }
 
+  // 這是收集階段的停滯訊號；外層保留已取得的資料，繼續第二階段。
   function incompleteCollectionError(cardsByCode, totalCount, reason) {
-    const count = processedCount(cardsByCode);
-    const missing = totalCount ? `,仍缺 ${Math.max(0, totalCount - count)} 份` : '';
-    const error = new Error(`收集未完成:${count}/${totalCount || '總數未知'}${missing}。${reason}。本次未進入評分,請回到 104 分頁確認載入後重新掃描。`);
+    const error = new Error(reason);
     error.code = 'SCAN_COLLECTION_INCOMPLETE';
     return error;
   }
 
-  function assertCollectionComplete(cardsByCode, totalCount, terminalConfirmed = false) {
+  function finalizeCollection(cardsByCode, totalCount, terminalConfirmed = false, reason = '', initialTotalCount = totalCount) {
     if (scanCancellationRequested) throw new Error('SCAN_CANCELLED');
-    if (totalCount ? processedCount(cardsByCode) < totalCount : !terminalConfirmed) {
-      throw incompleteCollectionError(cardsByCode, totalCount, '尚未確認全部搜尋結果已收齊');
-    }
+    const count = processedCount(cardsByCode);
+    if (!count) throw new Error('未取得任何履歷，請確認104搜尋結果已載入。');
+    const codes = currentCodeSignature().split('|').filter(Boolean);
+    return {
+      collected: count, analyzable: cardsByCode.size, skipped: skippedCards.size,
+      total: totalCount, initialTotal: initialTotalCount,
+      difference: totalCount ? Math.max(0, totalCount - count) : null,
+      duplicateCards: codes.length - new Set(codes).size,
+      complete: totalCount ? count >= totalCount : terminalConfirmed,
+      reason
+    };
+  }
+
+  function collectionNotice(outcome) {
+    if (!outcome) return '';
+    const notes = [];
+    if (!outcome.complete) notes.push(outcome.total
+      ? `搜尋顯示 ${outcome.total} 筆，已取得 ${outcome.collected} 份不重複履歷，數量差 ${outcome.difference} 筆；未取得者未評分。`
+      : `搜尋總數未確認，已處理取得的 ${outcome.collected} 份履歷。`);
+    if (outcome.duplicateCards) notes.push(`目前頁面有 ${outcome.duplicateCards} 張重複卡片，同一履歷只處理一次。`);
+    if (outcome.initialTotal && outcome.total && outcome.initialTotal !== outcome.total) notes.push(`搜尋總數在掃描期間由 ${outcome.initialTotal} 改為 ${outcome.total}。`);
+    return notes.join(' ');
+  }
+
+  function collectionNoticeMarkup(outcome) {
+    const text = collectionNotice(outcome);
+    return text ? `<div data-collection-notice role="status" style="margin-bottom:10px;padding:10px;border-radius:8px;background:${UI.warningBg};color:${UI.warning};font-size:13px;">${escapeHtml(text)}</div>` : '';
   }
 
   async function waitForCards() {
@@ -1761,7 +1785,7 @@
       || (totalCount && pageCodes.size < PAGE_SIZE)) && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
       collectAndUpdateProgress(cardsByCode, totalCount);
       if (watchdog.stalled(collectionSignature(cardsByCode))) {
-        throw incompleteCollectionError(cardsByCode, totalCount, '持續沒有新增履歷,未將部分資料當成完成');
+        throw incompleteCollectionError(cardsByCode, totalCount, '重試載入後仍無新增履歷');
       }
       await fastScrollToBottom(cardsByCode, totalCount);
       const beforeWaitProcessed = processedCount(cardsByCode);
@@ -1866,7 +1890,7 @@
       collectAndUpdateProgress(cardsByCode, totalCount);
       if (targetReached(cardsByCode, totalCount) || pageTransitionReady(beforeCodes, currentCodeSignature(), beforePage, currentPageNumber())) return true;
       if (transitionWatchdog.stalled(collectionSignature(cardsByCode))) {
-        throw incompleteCollectionError(cardsByCode, totalCount, '下一頁尚未載入,未使用第一頁資料提前評分');
+        throw incompleteCollectionError(cardsByCode, totalCount, '等待下一頁後仍無新增履歷');
       }
       setStatus(`等待下一頁履歷${document.hidden ? '(背景執行中,保留掃描)' : ''}...${progressText(cardsByCode, totalCount)}`);
       await sleep(500);
@@ -2143,6 +2167,7 @@
     const visibleItems = visibleResultItems();
     const startIndex = (currentResultPage - 1) * RANKED_LIST_PAGE_SIZE;
     resultNode.innerHTML = `
+      ${collectionNoticeMarkup(latestCollectionOutcome)}
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
         ${renderFilterMenu("status", "狀態", [{id:"ranked",label:`推薦 ${latestRanked.length}`},{id:"review",label:`人工覆核 ${latestReviewRequired.length}`},{id:"excluded",label:`排除 ${latestExcluded.length}`},{id:"skipped",label:`跳過 ${latestSkipped.length}`}], selectedStatusFilters)}
         ${renderFilterMenu("role", "職位", ROLE_OPTIONS, selectedRoleFilters)}
@@ -2168,7 +2193,7 @@
     const shortageNote = latestRanked.length
       ? `已依分數排序；可勾選後開啟履歷。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`
       : `沒有推薦候選人。${excludedReasonSummary ? `硬排除主因：${excludedReasonSummary}` : ""}`;
-    setStatus(shortageNote);
+    setStatus(`${collectionNotice(latestCollectionOutcome)} ${shortageNote}`.trim());
   }
 
   function escapeHtml(value) {
@@ -2248,6 +2273,72 @@
     setStatus(`已開啟 ${profiles.length} 筆高分履歷，清單已標示為「已讀」。再次點擊會接續下一批。`);
   }
 
+  async function collectSearchResults(cardsByCode, totalCount = getTotalCount()) {
+    await waitForCards();
+    const initialTotalCount = totalCount;
+    let terminalConfirmed = false;
+    let stopReason = '';
+    try {
+      let batch = 1;
+      let visitedPages = 1;
+      let noGrowthRounds = 0;
+      setStageProgress(1, '收集履歷', 0, totalCount, 5, 65);
+      await prepareScanPosition(cardsByCode, totalCount);
+
+      // 資料仍在增加就繼續等待；只有確認停滯才保留部分結果進入第二階段。
+      while (!targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
+        const beforeProcessed = processedCount(cardsByCode);
+        const beforeSignature = currentCodeSignature();
+        setStatus(`連續掃描第 ${batch} 批...${progressText(cardsByCode, totalCount)}`);
+        let pageStalled = false;
+        try {
+          await scrollUntilStable(cardsByCode, totalCount);
+        } catch (error) {
+          if (error?.code !== 'SCAN_COLLECTION_INCOMPLETE') throw error;
+          pageStalled = true;
+          stopReason = error.message;
+          // 單頁少載入時仍先嘗試下一頁，不把這一頁的停滯當成整個搜尋結束。
+        }
+        totalCount = getTotalCount() || totalCount;
+        if (targetReached(cardsByCode, totalCount) || scanCancellationRequested) break;
+        const autoGenerated = !pageStalled && await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
+        if (!autoGenerated && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
+          const hasNext = await goNextPage(cardsByCode, totalCount);
+          if (!hasNext) { terminalConfirmed = document.hidden !== true; break; }
+          visitedPages += 1;
+          if (!totalCount && visitedPages > UNKNOWN_TOTAL_MAX_PAGES) {
+            throw incompleteCollectionError(cardsByCode, totalCount, '未知總數已達安全頁數上限');
+          }
+          window.scrollTo(0, 0);
+          await waitForCards();
+          await sleep(500);
+          collectAndUpdateProgress(cardsByCode, totalCount);
+        }
+        if (processedCount(cardsByCode) <= beforeProcessed && document.hidden !== true) noGrowthRounds += 1;
+        else noGrowthRounds = 0;
+        if (noGrowthRounds >= MAX_NO_GROWTH_ROUNDS) {
+          throw incompleteCollectionError(cardsByCode, totalCount, '多次載入仍沒有新增履歷');
+        }
+        batch += 1;
+      }
+      if (!totalCount) await settleFinalBottom(cardsByCode, totalCount);
+      totalCount = getTotalCount() || totalCount;
+    } catch (error) {
+      if (scanCancellationRequested || error?.message === 'SCAN_CANCELLED') throw new Error('SCAN_CANCELLED');
+      if (error?.code !== 'SCAN_COLLECTION_INCOMPLETE') throw error;
+      stopReason = error.message;
+      // 最後再收一次已載入卡片，不遺失逾時邊界上剛到的資料。
+      collectAndUpdateProgress(cardsByCode, totalCount);
+    }
+    totalCount = getTotalCount() || totalCount;
+    const outcome = finalizeCollection(cardsByCode, totalCount, terminalConfirmed, stopReason, initialTotalCount);
+    if (!outcome.complete) console.warn('resume_collection_partial', {
+      collected: outcome.collected, total: outcome.total, difference: outcome.difference,
+      duplicateCards: outcome.duplicateCards, reason: outcome.reason
+    });
+    return outcome;
+  }
+
   async function scan() {
     mountPanel();
     if (isScanning) return;
@@ -2261,6 +2352,7 @@
     restoreExcludedCards();
     // 重新展開前一次已隱藏的卡片，掃描期間改以 visibility 保留佔位，避免 104 補載另一批履歷。
     restoreHiddenCards();
+    latestCollectionOutcome = null;
     latestRanked = [];
     latestReviewRequired = [];
     latestExcluded = [];
@@ -2289,51 +2381,12 @@
       await loadSharedRules();
       if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
       else setStatus("共用規則已就緒，開始掃描卡片...");
-      await waitForCards();
-      let totalCount = getTotalCount();
-      let batch = 1;
-      let visitedPages = 1;
-      let noGrowthRounds = 0;
-      let terminalConfirmed = false;
-      setStageProgress(1, '收集履歷', 0, totalCount, 5, 65);
-      await prepareScanPosition(cardsByCode, totalCount);
-
-      // 有進度就繼續,不以固定批數或總耗時結束;未達已知總數一律不進第二階段。
-      while (!targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
-        const beforeProcessed = processedCount(cardsByCode);
-        const beforeSignature = currentCodeSignature();
-        setStatus(`連續掃描第 ${batch} 批...${progressText(cardsByCode, totalCount)}`);
-        await scrollUntilStable(cardsByCode, totalCount);
-        totalCount = totalCount || getTotalCount();
-        if (targetReached(cardsByCode, totalCount) || scanCancellationRequested) break;
-        const autoGenerated = await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
-        if (!autoGenerated && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
-          const hasNext = await goNextPage(cardsByCode, totalCount);
-          if (!hasNext) { terminalConfirmed = document.hidden !== true; break; }
-          visitedPages += 1;
-          if (!totalCount && visitedPages > UNKNOWN_TOTAL_MAX_PAGES) {
-            throw incompleteCollectionError(cardsByCode, totalCount, '未知總數已達安全頁數上限');
-          }
-          window.scrollTo(0, 0);
-          await waitForCards();
-          await sleep(500);
-          collectAndUpdateProgress(cardsByCode, totalCount);
-        }
-        if (processedCount(cardsByCode) <= beforeProcessed && document.hidden !== true) noGrowthRounds += 1;
-        else noGrowthRounds = 0;
-        if (noGrowthRounds >= MAX_NO_GROWTH_ROUNDS) {
-          throw incompleteCollectionError(cardsByCode, totalCount, '多次載入仍沒有新增履歷');
-        }
-        batch += 1;
-      }
-      if (!totalCount) await settleFinalBottom(cardsByCode, totalCount);
-      totalCount = totalCount || getTotalCount();
-      assertCollectionComplete(cardsByCode, totalCount, terminalConfirmed);
+      latestCollectionOutcome = await collectSearchResults(cardsByCode);
 
       for (const skippedCode of skippedCards.keys()) cardsByCode.delete(skippedCode);
       collapseSkippedCards();
       const cards = [...cardsByCode.values()];
-      setStatus(`初篩完成 ${cards.length} 筆，準備後端評分...`);
+      setStatus(`${collectionNotice(latestCollectionOutcome)} 初篩取得 ${cards.length} 筆，繼續第2階段...`);
       const enrichment = await enrichResumeDetails(cards);
       if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
       if (enrichment.requested) {
@@ -2361,7 +2414,7 @@
         excludedReasonCounts: ranking.excludedReasonCounts
       });
       if (movedCards || hiddenExcludedCards) {
-          setStatus(`已重排畫面上 ${movedCards} 張卡片並隱藏 ${hiddenExcludedCards} 張硬排除卡片；完整搜尋結果請看右下角排名清單。`);
+          setStatus(`${collectionNotice(latestCollectionOutcome)} 已重排畫面上 ${movedCards} 張卡片並隱藏 ${hiddenExcludedCards} 張硬排除卡片；完整搜尋結果請看右下角排名清單。`);
       }
     } catch (error) {
       console.error(error);
@@ -2390,7 +2443,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({currentPageNumber, createScanClock, createProgressWatchdog, assertCollectionComplete, pageTransitionReady, goNextPage, scrollUntilStable, rankCandidates, loadSharedRules, mountPanel, setScanningIndicator, desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, unreadPriority, suitableRoleIds, filterResults, roleBadgeMarkup, renderFilterMenu, renderResultItem, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({currentPageNumber, createScanClock, createProgressWatchdog, finalizeCollection, collectionNotice, collectionNoticeMarkup, collectSearchResults, enrichResumeDetails, pageTransitionReady, goNextPage, scrollUntilStable, rankCandidates, loadSharedRules, mountPanel, setScanningIndicator, desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, unreadPriority, suitableRoleIds, filterResults, roleBadgeMarkup, renderFilterMenu, renderResultItem, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
     return;
   }
 

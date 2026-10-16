@@ -44,7 +44,7 @@ test('面板直接提供綜合篩選，無職缺選單；掃描提示可正常�
   const panel = doc.body.children.find(n=>n.id==='resume-screening-104-panel');
   assert.match(panel.innerHTML,/綜合篩選 Java／C#／SA／QA/);
   assert.doesNotMatch(panel.innerHTML,/<select|data-role|請選擇/);
-  assert.match(panel.innerHTML,/v5\.1\.0/);
+  assert.match(panel.innerHTML,/v5\.1\.1/);
   api.setScanningIndicator(true);assert.equal(panel.parts['[data-screening-casting]'].style.display,'flex');
   api.setScanningIndicator(false);assert.equal(panel.parts['[data-screening-casting]'].style.display,'none');
 });
