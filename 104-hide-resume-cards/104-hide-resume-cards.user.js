@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      5.0.8
+// @version      5.0.9
 // @description  綜合 Java、C#/.NET、SA、QA 條件，掃描並呈現推薦、人工審核、排除及適合職位。
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -57,7 +57,6 @@
   const PAGE_SIZE = 50;
   // 104 總筆數偶爾延遲出現；未知總數時仍給予合理頁數上限，避免無限翻頁。
   const UNKNOWN_TOTAL_MAX_PAGES = 30;
-  const EXTRA_PAGE_SAFETY_LIMIT = 3;
   const MAX_NO_GROWTH_ROUNDS = 2;
   const FAST_SCROLL_DELAY_MS = 110;
   const BOTTOM_LOAD_WAIT_MS = 3200;
@@ -79,8 +78,9 @@
   const BADGE_LIMIT = 4;
   const FILTER_DEBOUNCE_MS = 450;
   const FILTER_MAX_CARDS_PER_PASS = 40;
-  const SCAN_STALL_TIMEOUT_MS = 22000;
-  const PAGE_CHANGE_TIMEOUT_MS = 14000;
+  const SCAN_STALL_TIMEOUT_MS = 90000;
+  const PAGE_CHANGE_TIMEOUT_MS = 45000;
+  const MAX_CLOCK_STEP_MS = 5000;
   const DETAIL_REQUEST_CONCURRENCY = 2;
   const DETAIL_REQUEST_MIN_DELAY_MS = 800;
   const DETAIL_REQUEST_MAX_DELAY_MS = 1200;
@@ -149,6 +149,7 @@
   let isCollapsed = true;
   let isPrintHidden = false;
   let scanCancellationRequested = false;
+  let activeScanClock = null;
   let tooltipNode;
   let activeTooltipTarget;
   const cardTextCache = new WeakMap();
@@ -194,7 +195,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.0.7</strong>
+          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.0.9</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;">待掃描</div>
@@ -1468,8 +1469,53 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // 背景分頁計時器可能被延後;只累計前景可觀測時間,避免切回時一次耗盡逾時額度。
+  function createScanClock(doc = document, now = () => Date.now()) {
+    let lastWall = now();
+    let hidden = doc.hidden === true;
+    let elapsed = 0;
+    function tick() {
+      const wall = now();
+      if (!hidden) elapsed += Math.max(0, Math.min(wall - lastWall, MAX_CLOCK_STEP_MS));
+      lastWall = wall;
+      hidden = doc.hidden === true;
+      return elapsed;
+    }
+    doc.addEventListener('visibilitychange', tick);
+    return { now: tick, dispose: () => doc.removeEventListener('visibilitychange', tick) };
+  }
+
+  function createProgressWatchdog(timeoutMs, now = () => activeScanClock?.now() ?? Date.now()) {
+    let signature;
+    let lastProgress = now();
+    return { stalled(nextSignature) {
+      const time = now();
+      if (signature !== nextSignature) { signature = nextSignature; lastProgress = time; }
+      return time - lastProgress >= timeoutMs;
+    } };
+  }
+
+  function collectionSignature(cardsByCode, includeScroll = false) {
+    return [processedCount(cardsByCode), currentCodeSignature(), documentHeight(), includeScroll ? window.scrollY : ''].join(':');
+  }
+
+  function incompleteCollectionError(cardsByCode, totalCount, reason) {
+    const count = processedCount(cardsByCode);
+    const missing = totalCount ? `,仍缺 ${Math.max(0, totalCount - count)} 份` : '';
+    const error = new Error(`收集未完成:${count}/${totalCount || '總數未知'}${missing}。${reason}。本次未進入評分,請回到 104 分頁確認載入後重新掃描。`);
+    error.code = 'SCAN_COLLECTION_INCOMPLETE';
+    return error;
+  }
+
+  function assertCollectionComplete(cardsByCode, totalCount, terminalConfirmed = false) {
+    if (scanCancellationRequested) throw new Error('SCAN_CANCELLED');
+    if (totalCount ? processedCount(cardsByCode) < totalCount : !terminalConfirmed) {
+      throw incompleteCollectionError(cardsByCode, totalCount, '尚未確認全部搜尋結果已收齊');
+    }
+  }
+
   async function waitForCards() {
-    for (let index = 0; index < 60; index += 1) {
+    for (let index = 0; index < 60 && !scanCancellationRequested; index += 1) {
       if (document.querySelector(CARD_SELECTOR)) {
         filterResumeCards();
         return;
@@ -1636,17 +1682,16 @@
   }
 
   async function fastScrollToBottom(cardsByCode, totalCount) {
-    const startedAt = Date.now();
-    const stallTimeoutMs = clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS);
+    const stallTimeoutMs = Math.max(SCAN_STALL_TIMEOUT_MS, clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS));
+    const watchdog = createProgressWatchdog(stallTimeoutMs);
     const fastScrollDelayMs = clientTimingValue("fastScrollDelayMs", FAST_SCROLL_DELAY_MS);
     let lastScrollY = -1;
     let stuckRounds = 0;
     while (!isNearBottom() && stuckRounds < 4 && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
-      if (Date.now() - startedAt >= stallTimeoutMs) {
-        setStatus(`滾動等待超過 ${Math.round(stallTimeoutMs / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
-        break;
-      }
       collectAndUpdateProgress(cardsByCode, totalCount);
+      if (watchdog.stalled(collectionSignature(cardsByCode, true))) {
+        throw incompleteCollectionError(cardsByCode, totalCount, '滾動期間持續沒有新履歷或頁面進度');
+      }
       window.scrollTo(0, Math.min(documentHeight(), window.scrollY + Math.max(window.innerHeight * 2.8, 2200)));
       await sleep(fastScrollDelayMs);
       if (Math.abs(window.scrollY - lastScrollY) < 8) stuckRounds += 1;
@@ -1657,22 +1702,22 @@
   }
 
   async function scrollUntilStable(cardsByCode, totalCount) {
-    const startedAt = Date.now();
-    const stallTimeoutMs = clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS);
+    const stallTimeoutMs = Math.max(SCAN_STALL_TIMEOUT_MS, clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS));
+    const watchdog = createProgressWatchdog(stallTimeoutMs);
     const bottomLoadWaitMs = clientTimingValue("bottomLoadWaitMs", BOTTOM_LOAD_WAIT_MS);
     const fastScrollDelayMs = clientTimingValue("fastScrollDelayMs", FAST_SCROLL_DELAY_MS);
     const bottomStableRounds = clientTimingValue("bottomStableRounds", BOTTOM_STABLE_ROUNDS);
     const scrollHeightStableRounds = clientTimingValue("scrollHeightStableRounds", SCROLL_HEIGHT_STABLE_ROUNDS);
-    let timedOut = false;
     let previousProcessed = -1;
     let previousHeight = -1;
     let stableRounds = 0;
     let heightStableRounds = 0;
-    while ((stableRounds < bottomStableRounds || heightStableRounds < scrollHeightStableRounds || !isNearBottom(24)) && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
-      if (Date.now() - startedAt >= stallTimeoutMs) {
-        setStatus(`等待下一批超過 ${Math.round(stallTimeoutMs / 1000)} 秒，先用目前已載入履歷結算...${progressText(cardsByCode, totalCount)}`);
-        timedOut = true;
-        break;
+    const pageCodes = new Set(currentCodeSignature().split('|').filter(Boolean));
+    while ((stableRounds < bottomStableRounds || heightStableRounds < scrollHeightStableRounds || !isNearBottom(24)
+      || (totalCount && pageCodes.size < PAGE_SIZE)) && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
+      collectAndUpdateProgress(cardsByCode, totalCount);
+      if (watchdog.stalled(collectionSignature(cardsByCode))) {
+        throw incompleteCollectionError(cardsByCode, totalCount, '持續沒有新增履歷,未將部分資料當成完成');
       }
       await fastScrollToBottom(cardsByCode, totalCount);
       const beforeWaitProcessed = processedCount(cardsByCode);
@@ -1681,28 +1726,33 @@
       scrollToDocumentBottom();
       await sleep(fastScrollDelayMs);
       collectAndUpdateProgress(cardsByCode, totalCount);
+      currentCodeSignature().split('|').filter(Boolean).forEach(code => pageCodes.add(code));
       const currentProcessed = processedCount(cardsByCode);
       const currentHeight = documentHeight();
-      if (currentProcessed === beforeWaitProcessed && currentProcessed === previousProcessed) stableRounds += 1;
+      const maySettle = document.hidden !== true || currentCodeSignature().split('|').filter(Boolean).length >= PAGE_SIZE;
+      if (!maySettle) { stableRounds = 0; heightStableRounds = 0; }
+      else if (currentProcessed === beforeWaitProcessed && currentProcessed === previousProcessed) stableRounds += 1;
       else stableRounds = 0;
-      if (currentHeight === previousHeight) heightStableRounds += 1;
+      if (maySettle && currentHeight === previousHeight) heightStableRounds += 1;
       else heightStableRounds = 0;
       previousProcessed = currentProcessed;
       previousHeight = currentHeight;
     }
-    return { timedOut };
+    return { stable: true };
   }
 
   async function settleFinalBottom(cardsByCode, totalCount) {
-    const startedAt = Date.now();
-    const stallTimeoutMs = clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS);
+    const stallTimeoutMs = Math.max(SCAN_STALL_TIMEOUT_MS, clientTimingValue("stallTimeoutMs", SCAN_STALL_TIMEOUT_MS));
+    const watchdog = createProgressWatchdog(stallTimeoutMs);
     const bottomLoadWaitMs = clientTimingValue("bottomLoadWaitMs", BOTTOM_LOAD_WAIT_MS);
     const finalBottomSettleRounds = clientTimingValue("finalBottomSettleRounds", FINAL_BOTTOM_SETTLE_ROUNDS);
     let previousProcessed = -1;
     let previousHeight = -1;
     let stableRounds = 0;
     while (stableRounds < finalBottomSettleRounds && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
-      if (Date.now() - startedAt >= stallTimeoutMs) break;
+      if (watchdog.stalled(collectionSignature(cardsByCode))) {
+        throw incompleteCollectionError(cardsByCode, totalCount, '頁尾確認期間沒有進度');
+      }
       scrollToDocumentBottom();
       await sleep(bottomLoadWaitMs);
       collectAndUpdateProgress(cardsByCode, totalCount);
@@ -1720,7 +1770,9 @@
     const activePageNumber = Number(normalizeText(activePage?.textContent));
     if (Number.isInteger(activePageNumber) && activePageNumber > 0) return activePageNumber;
     const href = document.querySelector(PROFILE_LINK_SELECTOR)?.getAttribute("href") || "";
-    const match = decodeURIComponent(href).match(/"page"\s*:\s*(\d+)/);
+    let decodedHref = href;
+    try { decodedHref = decodeURIComponent(href); } catch (_) { /* 不完整編碼不影響卡片收集。 */ }
+    const match = decodedHref.match(/"page"\s*:\s*(\d+)/);
     return Number(match?.[1] || 1);
   }
 
@@ -1733,23 +1785,49 @@
       || candidates.find((element) => usable(element) && /下一頁|下頁|>|›/.test(`${normalizeText(element.textContent)} ${normalizeText(element.getAttribute("aria-label"))}`));
   }
 
-  async function goNextPage() {
-    const nextButton = findNextButton();
-    if (!nextButton) return false;
-    const beforeCodes = currentCodeSignature();
-    setStatus(`切換到第 ${currentPageNumber() + 1} 頁，等待 104 回應...`);
-    nextButton.scrollIntoView({ block: "center" });
-    await sleep(500);
-    nextButton.click();
-    await sleep(1200);
-    const pageChangeTimeoutMs = clientTimingValue("pageChangeTimeoutMs", PAGE_CHANGE_TIMEOUT_MS);
-    const deadline = Date.now() + pageChangeTimeoutMs;
-    while (Date.now() < deadline) {
-      if (currentCodeSignature() && currentCodeSignature() !== beforeCodes) return true;
+  function pageTransitionReady(beforeCodes, afterCodes, beforePage, afterPage) {
+    if (!afterCodes || beforeCodes === afterCodes) return false;
+    const before = new Set(beforeCodes.split('|').filter(Boolean));
+    const after = afterCodes.split('|').filter(Boolean);
+    const hasNew = after.some(code => !before.has(code));
+    return hasNew && (afterPage > beforePage || after.every(code => !before.has(code)));
+  }
+
+  async function goNextPage(cardsByCode, totalCount, clock = activeScanClock) {
+    const timeoutMs = Math.max(PAGE_CHANGE_TIMEOUT_MS, clientTimingValue('pageChangeTimeoutMs', PAGE_CHANGE_TIMEOUT_MS));
+    const watchdog = createProgressWatchdog(timeoutMs, () => clock?.now() ?? Date.now());
+    let nextButton;
+    // 已知還缺履歷時,下一頁按鈕暫未出現不等於已到末頁。
+    while (!scanCancellationRequested && !targetReached(cardsByCode, totalCount)) {
+      collectAndUpdateProgress(cardsByCode, totalCount);
+      nextButton = findNextButton();
+      if (nextButton) break;
+      if (!totalCount && document.hidden !== true) return false;
+      if (watchdog.stalled(collectionSignature(cardsByCode))) {
+        throw incompleteCollectionError(cardsByCode, totalCount, '尚未找到可用的下一頁按鈕');
+      }
+      setStatus(`等待 104 顯示下一頁${document.hidden ? '(背景執行中)' : ''}...${progressText(cardsByCode, totalCount)}`);
+      scrollToDocumentBottom();
       await sleep(500);
     }
-    setStatus(`等待第 ${currentPageNumber() + 1} 頁超過 ${Math.round(pageChangeTimeoutMs / 1000)} 秒，先用目前已收集履歷結算。`);
-    return false;
+    if (scanCancellationRequested) throw new Error('SCAN_CANCELLED');
+    if (!nextButton) return false;
+    const beforeCodes = currentCodeSignature();
+    const beforePage = currentPageNumber();
+    setStatus(`切換到第 ${beforePage + 1} 頁,等待 104 回應...`);
+    nextButton.scrollIntoView({ block: 'center' });
+    nextButton.click();
+    const transitionWatchdog = createProgressWatchdog(timeoutMs, () => clock?.now() ?? Date.now());
+    while (!scanCancellationRequested) {
+      collectAndUpdateProgress(cardsByCode, totalCount);
+      if (targetReached(cardsByCode, totalCount) || pageTransitionReady(beforeCodes, currentCodeSignature(), beforePage, currentPageNumber())) return true;
+      if (transitionWatchdog.stalled(collectionSignature(cardsByCode))) {
+        throw incompleteCollectionError(cardsByCode, totalCount, '下一頁尚未載入,未使用第一頁資料提前評分');
+      }
+      setStatus(`等待下一頁履歷${document.hidden ? '(背景執行中,保留掃描)' : ''}...${progressText(cardsByCode, totalCount)}`);
+      await sleep(500);
+    }
+    throw new Error('SCAN_CANCELLED');
   }
 
   async function waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount) {
@@ -2120,6 +2198,7 @@
     if (isScanning) return;
     isScanning = true;
     scanCancellationRequested = false;
+    activeScanClock = createScanClock();
     startButton.disabled = false;
     startButton.textContent = "中止掃描";
     startButton.style.background = UI.danger;
@@ -2153,41 +2232,46 @@
       await loadSharedRules();
       if (sharedRuleState.statusMessage) setStatus(sharedRuleState.statusMessage);
       else setStatus("共用規則已就緒，開始掃描卡片...");
-      const totalCount = getTotalCount();
-      const expectedPages = totalCount ? Math.ceil(totalCount / PAGE_SIZE) : UNKNOWN_TOTAL_MAX_PAGES;
-      let batch = 1;
-      let noGrowthRounds = 0;
-      setStageProgress(1, "收集履歷", 0, totalCount, 5, 65);
       await waitForCards();
+      let totalCount = getTotalCount();
+      let batch = 1;
+      let visitedPages = 1;
+      let noGrowthRounds = 0;
+      let terminalConfirmed = false;
+      setStageProgress(1, '收集履歷', 0, totalCount, 5, 65);
       await prepareScanPosition(cardsByCode, totalCount);
 
-      // 每一頁先讓 104 自然滾動載入；確認沒有新批次後才使用站內分頁切換。
-      while (batch <= expectedPages + EXTRA_PAGE_SAFETY_LIMIT && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
+      // 有進度就繼續,不以固定批數或總耗時結束;未達已知總數一律不進第二階段。
+      while (!targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
         const beforeProcessed = processedCount(cardsByCode);
         const beforeSignature = currentCodeSignature();
         setStatus(`連續掃描第 ${batch} 批...${progressText(cardsByCode, totalCount)}`);
-        const stableResult = await scrollUntilStable(cardsByCode, totalCount);
-        if (stableResult?.timedOut || targetReached(cardsByCode, totalCount) || scanCancellationRequested) break;
-
+        await scrollUntilStable(cardsByCode, totalCount);
+        totalCount = totalCount || getTotalCount();
+        if (targetReached(cardsByCode, totalCount) || scanCancellationRequested) break;
         const autoGenerated = await waitForAutoGeneratedBatch(beforeSignature, cardsByCode, totalCount);
         if (!autoGenerated && !targetReached(cardsByCode, totalCount) && !scanCancellationRequested) {
-          const hasNext = await goNextPage();
-          if (!hasNext) break;
+          const hasNext = await goNextPage(cardsByCode, totalCount);
+          if (!hasNext) { terminalConfirmed = document.hidden !== true; break; }
+          visitedPages += 1;
+          if (!totalCount && visitedPages > UNKNOWN_TOTAL_MAX_PAGES) {
+            throw incompleteCollectionError(cardsByCode, totalCount, '未知總數已達安全頁數上限');
+          }
           window.scrollTo(0, 0);
           await waitForCards();
           await sleep(500);
           collectAndUpdateProgress(cardsByCode, totalCount);
         }
-
-        if (processedCount(cardsByCode) <= beforeProcessed) noGrowthRounds += 1;
+        if (processedCount(cardsByCode) <= beforeProcessed && document.hidden !== true) noGrowthRounds += 1;
         else noGrowthRounds = 0;
-        if (noGrowthRounds >= MAX_NO_GROWTH_ROUNDS) break;
+        if (noGrowthRounds >= MAX_NO_GROWTH_ROUNDS) {
+          throw incompleteCollectionError(cardsByCode, totalCount, '多次載入仍沒有新增履歷');
+        }
         batch += 1;
       }
-
-      setStatus(`最後確認頁尾是否還有延遲載入卡片...${progressText(cardsByCode, totalCount)}`);
-      await settleFinalBottom(cardsByCode, totalCount);
-      if (scanCancellationRequested) throw new Error("SCAN_CANCELLED");
+      if (!totalCount) await settleFinalBottom(cardsByCode, totalCount);
+      totalCount = totalCount || getTotalCount();
+      assertCollectionComplete(cardsByCode, totalCount, terminalConfirmed);
 
       for (const skippedCode of skippedCards.keys()) cardsByCode.delete(skippedCode);
       collapseSkippedCards();
@@ -2234,6 +2318,8 @@
         setProgress(0, "失敗");
       }
     } finally {
+      activeScanClock?.dispose();
+      activeScanClock = null;
       isScanning = false;
       scanCancellationRequested = false;
       startButton.disabled = false;
@@ -2247,7 +2333,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({rankCandidates, loadSharedRules, mountPanel, setScanningIndicator, desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({currentPageNumber, createScanClock, createProgressWatchdog, assertCollectionComplete, pageTransitionReady, goNextPage, scrollUntilStable, rankCandidates, loadSharedRules, mountPanel, setScanningIndicator, desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
     return;
   }
 
