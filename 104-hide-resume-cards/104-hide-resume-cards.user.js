@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         104 Resume Screening Unified
 // @namespace    local.104-hide-resume-cards
-// @version      5.0.9
+// @version      5.1.0
 // @description  綜合 Java、C#/.NET、SA、QA 條件，掃描並呈現推薦、人工審核、排除及適合職位。
 // @match        https://vip.104.com.tw/search/searchResult*
 // @grant        GM_setClipboard
@@ -141,7 +141,10 @@
   let selectedResumeCodes = new Set();
   let openedResumeCodes = loadOpenedResumeCodes();
   let isOpeningProfiles = false;
-  let currentResultFilter = "ranked";
+  let currentResultFilter = "all";
+  let selectedStatusFilters = [];
+  let selectedRoleFilters = [];
+  let openResultFilter = "";
   let currentResultPage = 1;
   let latestCardsByCode = new Map();
   let latestScoreByCode = new Map();
@@ -195,7 +198,7 @@
       </button>
       <div data-screening-shell style="display:none;min-height:0;">
         <div data-screening-header style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px 4px 10px;border-bottom:1px solid ${UI.border};background:${UI.surface};cursor:move;user-select:none;">
-          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.0.9</strong>
+          <strong style="color:${UI.navy};font-size:${TYPE_SCALE.title}px;font-weight:900;">104 履歷掃描 v5.1.0</strong>
           <button data-screening-toggle style="width:32px;height:30px;border:1px solid ${UI.border};border-radius:8px;background:#fff;color:${UI.navy};font-weight:900;cursor:pointer;" title="收合成右下角按鈕">－</button>
         </div>
         <div data-screening-summary style="margin-bottom:8px;color:${UI.navy};font-size:${TYPE_SCALE.heading}px;font-weight:700;">待掃描</div>
@@ -1459,10 +1462,46 @@
     };
   }
 
+  function unreadPriority(items) {
+    return ["ranked", "review_required"].flatMap(status => sortResultsByScore(items.filter(item => item.status === status)));
+  }
   function nextUnreadHighScoreBatch(items, openedCodes, limit = 15) {
-    return sortResultsByScore(items)
-      .filter((item) => item.status !== "excluded" && item.profileUrl && !openedCodes.has(item.resumeCode))
-      .slice(0, limit);
+    return unreadPriority(items).filter(item => item.profileUrl && !openedCodes.has(item.resumeCode)).slice(0, limit);
+  }
+
+  const ROLE_OPTIONS = Object.freeze([
+    { id: "java", label: "Java PG", color: "#c9daf8", aliases: ["java-programmer", "java"] },
+    { id: "net", label: ".Net PG", color: "#f4cccc", aliases: ["csharp-dotnet-programmer", "c#/.net", ".net", "net", "c#"] },
+    { id: "pm", label: "PM", color: "#fff27a", aliases: ["project-manager", "pm"] },
+    { id: "qa", label: "軟體測試 QA", color: "#d9ead3", aliases: ["software-qa", "qa-engineer", "software-tester", "qa", "軟體測試"] },
+    { id: "algorithm", label: "演算法", color: "#ffc44d", aliases: ["algorithm", "演算法"] },
+    { id: "sales", label: "Sales", color: "#d4a8ff", aliases: ["sales"] },
+    { id: "hr", label: "HR", color: "#eeeeee", aliases: ["hr"] },
+    { id: "sa", label: "SA", color: "#d9d9d9", aliases: ["system-analyst", "sa"] }
+  ]);
+  function suitableRoleIds(item) {
+    const values = (item.recommendedRoles || []).flatMap(role => typeof role === "string" ? [role] : [role.id, role.name, role.label]);
+    // 僅採明確的「適合」結果，不把「待確認」誤當已判斷適合。
+    (item.displayTags || []).forEach(tag => { if (/^#?適合/.test(tag)) values.push(tag.replace(/^#?適合/, "")); });
+    return ROLE_OPTIONS.filter(role => values.some(value => role.aliases.includes(String(value || "").trim().toLowerCase()) || role.label.toLowerCase() === String(value || "").trim().toLowerCase())).map(role => role.id);
+  }
+  function filterResults(items, statuses = [], roles = []) {
+    return sortResultsByScore(items).filter(item => {
+      const status = item.clientSkipped || item.skippedBeforeScoring ? "skipped" : item.status === "review_required" ? "review" : item.status;
+      return (!statuses.length || statuses.includes(status)) && (!roles.length || suitableRoleIds(item).some(role => roles.includes(role)));
+    });
+  }
+  function filteredResults() { return filterResults(latestAllResults, selectedStatusFilters, selectedRoleFilters); }
+  function roleBadgeMarkup(item) {
+    return suitableRoleIds(item).map(id => {
+      const role = ROLE_OPTIONS.find(role => role.id === id);
+      return `<span data-suitable-role="${role.id}" title="系統判斷適合：${role.label}" style="display:inline-block;border-radius:6px;padding:3px 7px;background:${role.color};color:#172b43;font-size:12px;font-weight:800;white-space:nowrap;">${role.label}</span>`;
+    }).join("");
+  }
+  function renderFilterMenu(kind, title, options, selected) {
+    const summary = selected.length ? options.filter(option => selected.includes(option.id)).map(option => option.label).join("、") : "全部";
+    const checkbox = (id, label, checked) => `<label style="display:flex;align-items:center;gap:8px;padding:6px;cursor:pointer;"><input type="checkbox" data-filter-kind="${kind}" data-filter-value="${id}" ${checked ? "checked" : ""}>${escapeHtml(label)}</label>`;
+    return `<details data-filter-menu="${kind}" ${openResultFilter === kind ? "open" : ""} style="flex:1;min-width:150px;border:1px solid ${UI.border};border-radius:8px;padding:7px;background:white;"><summary style="cursor:pointer;font-weight:700;">${title}：${escapeHtml(summary)}</summary><div style="max-height:260px;overflow:auto;">${checkbox("all", "全部呈現", !selected.length)}${options.map(option => checkbox(option.id, option.label, selected.includes(option.id))).join("")}</div></details>`;
   }
 
   function sleep(ms) {
@@ -1589,6 +1628,11 @@
     badge.className = `resume-screening-score-badge resume-screening-score-badge--${qualified ? "qualified" : "unqualified"}`;
     badge.textContent = `${item.score}｜${qualified ? "合格" : item.status === "review_required" ? "覆核" : "不合格"}`;
     setBadgeTooltip(badge, scoreTooltip(item));
+    container.querySelectorAll("[data-suitable-role]").forEach(node => node.remove());
+    const roles = document.createElement("span");
+    roles.dataset.suitableRole = "container";
+    roles.innerHTML = roleBadgeMarkup(item);
+    container.prepend(roles);
     renderBackendResultTags(card, item);
   }
 
@@ -1863,15 +1907,13 @@
   }
 
   function visibleResultItems() {
-    const groups = resultGroups();
-    const items = groups[currentResultFilter] || groups.ranked;
+    const items = filteredResults();
     const start = (currentResultPage - 1) * RANKED_LIST_PAGE_SIZE;
     return items.slice(start, start + RANKED_LIST_PAGE_SIZE);
   }
 
   function totalResultPages() {
-    const groups = resultGroups();
-    const items = groups[currentResultFilter] || groups.ranked;
+    const items = filteredResults();
     return Math.max(1, Math.ceil(items.length / RANKED_LIST_PAGE_SIZE));
   }
 
@@ -1965,7 +2007,7 @@
               ${displayTags.map((tag) => `<span data-resume-tag-tooltip="${escapeHtml(tagTooltip(tag, item))}" tabindex="0" aria-label="${escapeHtml(`${tag}：${tagTooltip(tag, item)}`)}" style="border-radius:999px;padding:1px 7px;font-size:13px;font-weight:700;${tagBadgeStyle(tag)}">${escapeHtml(tag)}</span>`).join("")}
             </div>
           </div>
-          <strong data-resume-tag-tooltip="${escapeHtml(scoreDetail)}" tabindex="0" aria-label="${escapeHtml(scoreDetail)}" style="${scoreBadgeStyle(item)}">${escapeHtml(scoreLabel)}</strong>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;"><strong data-resume-tag-tooltip="${escapeHtml(scoreDetail)}" tabindex="0" aria-label="${escapeHtml(scoreDetail)}" style="${scoreBadgeStyle(item)}">${escapeHtml(scoreLabel)}</strong>${roleBadgeMarkup(item)}</div>
         </div>
       </article>
     `;
@@ -2018,12 +2060,17 @@
   }
 
   function attachResultEvents() {
-    resultNode.querySelectorAll("[data-result-filter]").forEach((button) => {
-      button.addEventListener("click", () => {
-        currentResultFilter = button.dataset.resultFilter || "ranked";
+    resultNode.querySelectorAll("[data-filter-kind]").forEach(input => {
+      input.addEventListener("change", () => {
+        const kind = input.dataset.filterKind;
+        const value = input.dataset.filterValue;
+        const selected = kind === "status" ? selectedStatusFilters : selectedRoleFilters;
+        const next = value === "all" ? [] : input.checked ? [...new Set([...selected, value])] : selected.filter(id => id !== value);
+        if (kind === "status") selectedStatusFilters = next; else selectedRoleFilters = next;
+        openResultFilter = kind;
         currentResultPage = 1;
         renderResults();
-        scrollResultViewToTop();
+        resultNode.querySelector(`[data-filter-kind="${kind}"][data-filter-value="${value}"]`)?.focus();
       });
     });
     resultNode.querySelectorAll("[data-result-page]").forEach((button) => {
@@ -2072,7 +2119,7 @@
 
   function updateQuickOpenButton() {
     if (!quickOpenButton) return;
-    const eligible = sortResultsByScore(latestAllResults).filter((item) => item.status !== "excluded" && item.profileUrl);
+    const eligible = unreadPriority(filteredResults()).filter(item => item.profileUrl);
     const batch = nextUnreadHighScoreBatch(eligible, openedResumeCodes, 15);
     quickOpenButton.style.display = !isScanning && batch.length ? "block" : "none";
     quickOpenButton.disabled = isOpeningProfiles || !batch.length;
@@ -2097,18 +2144,15 @@
     const startIndex = (currentResultPage - 1) * RANKED_LIST_PAGE_SIZE;
     resultNode.innerHTML = `
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-        ${renderFilterButton("ranked", latestRanked.length)}
-        ${renderFilterButton("review", latestReviewRequired.length)}
-        ${renderFilterButton("excluded", latestExcluded.length)}
-        ${renderFilterButton("skipped", latestSkipped.length)}
-        ${renderFilterButton("all", latestAllResults.length)}
+        ${renderFilterMenu("status", "狀態", [{id:"ranked",label:`推薦 ${latestRanked.length}`},{id:"review",label:`人工覆核 ${latestReviewRequired.length}`},{id:"excluded",label:`排除 ${latestExcluded.length}`},{id:"skipped",label:`跳過 ${latestSkipped.length}`}], selectedStatusFilters)}
+        ${renderFilterMenu("role", "職位", ROLE_OPTIONS, selectedRoleFilters)}
       </div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
         ${renderSelectionButton("toggle-page", isVisiblePageFullySelected() ? "取消本頁全選" : "本頁全選")}
         ${latestExcluded.length ? `<button data-restore-excluded style="height:30px;border:1px solid ${UI.borderStrong};border-radius:8px;background:${UI.surface};color:${UI.navy};font-weight:700;cursor:pointer;padding:0 10px;">還原後端排除卡片</button>` : ""}
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;color:${UI.muted};font-size:14px;">
-        <span>${resultFilterLabel(currentResultFilter)}第 ${currentResultPage}/${totalPages} 頁，每頁 ${RANKED_LIST_PAGE_SIZE} 筆</span>
+        <span>符合 ${filteredResults().length} 筆 · 第 ${currentResultPage}/${totalPages} 頁，每頁 ${RANKED_LIST_PAGE_SIZE} 筆</span>
         <span data-selected-count>已勾選 ${selectedResumeCodes.size} 筆</span>
       </div>
       ${visibleItems.length ? visibleItems.map((item, index) => renderResultItem(item, startIndex + index + 1)).join("") : `<div style="color:${UI.muted};">沒有符合條件的候選人</div>`}
@@ -2162,9 +2206,23 @@
     setStatus(`已開啟 ${profiles.length} 個已勾選履歷分頁，清單已標示為「已讀」。`);
   }
 
+  function openGroupedProfiles(profiles) {
+    return new Promise((resolve, reject) => {
+      const requestId = `screening-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const timer = setTimeout(() => finish(null, new Error("未收到分組回覆。請確認已更新並啟用 104 招募工作台，再重新整理 104 頁面；若已有分頁開啟，請先確認再重試。")), 45000);
+      function finish(result, error) { clearTimeout(timer); window.removeEventListener("message", receive); if (error) reject(error); else resolve(result); }
+      function receive(event) {
+        if (event.source !== window || event.origin !== location.origin || event.data?.source !== "104-toolkit-response" || event.data.requestId !== requestId) return;
+        finish(event.data.result);
+      }
+      window.addEventListener("message", receive);
+      window.postMessage({source:"104-screening-request",requestId,profiles:profiles.map(item => ({url:item.profileUrl,status:item.status,resumeCode:item.resumeCode}))}, location.origin);
+    });
+  }
+
   async function openNextUnreadHighScoreProfiles() {
     if (isOpeningProfiles) return;
-    const profiles = nextUnreadHighScoreBatch(latestAllResults, openedResumeCodes, 15);
+    const profiles = nextUnreadHighScoreBatch(filteredResults(), openedResumeCodes, 15);
     if (!profiles.length) {
       setStatus("目前沒有尚未開啟的高分履歷。");
       updateQuickOpenButton();
@@ -2173,23 +2231,20 @@
     isOpeningProfiles = true;
     copyButton.disabled = true;
     updateQuickOpenButton();
-    setStatus(`準備依分數開啟下一批 ${profiles.length} 筆未讀履歷。`);
+    setStatus(`準備依推薦、人工審核順序開啟下一批 ${profiles.length} 筆未讀履歷。`);
+    let openError = "";
     try {
-      for (const [index, item] of profiles.entries()) {
-        GM_openInTab(item.profileUrl, {
-          active: index === 0,
-          insert: true,
-          setParent: true
-        });
-        rememberOpenedResumeCode(item.resumeCode);
-        setSummary(`本批已開啟 ${index + 1}/${profiles.length} 筆高分履歷`);
-        await sleep(180);
-      }
+      const result = await openGroupedProfiles(profiles);
+      (result.openedCodes || []).forEach(rememberOpenedResumeCode);
+      if (!result.ok) throw new Error(result.error || "部分履歷未能完成分組，請查看已開啟分頁。");
+    } catch (error) {
+      openError = error.message;
     } finally {
       isOpeningProfiles = false;
       copyButton.disabled = false;
       renderResults();
     }
+    if (openError) { setStatus(openError); return; }
     setStatus(`已開啟 ${profiles.length} 筆高分履歷，清單已標示為「已讀」。再次點擊會接續下一批。`);
   }
 
@@ -2216,7 +2271,9 @@
     selectedResumeCodes = new Set();
     openedResumeCodes = loadOpenedResumeCodes();
     isOpeningProfiles = false;
-    currentResultFilter = "ranked";
+    currentResultFilter = "all";
+    selectedStatusFilters = [];
+    selectedRoleFilters = [];
     currentResultPage = 1;
     resultNode.innerHTML = "";
     updateOpenButtonLabel();
@@ -2333,7 +2390,7 @@
   }
 
   if (globalThis.__RESUME_SCREENING_TEST_MODE__) {
-    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({currentPageNumber, createScanClock, createProgressWatchdog, assertCollectionComplete, pageTransitionReady, goNextPage, scrollUntilStable, rankCandidates, loadSharedRules, mountPanel, setScanningIndicator, desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
+    globalThis.__RESUME_SCREENING_TEST_API__ = Object.freeze({currentPageNumber, createScanClock, createProgressWatchdog, assertCollectionComplete, pageTransitionReady, goNextPage, scrollUntilStable, rankCandidates, loadSharedRules, mountPanel, setScanningIndicator, desiredTitlesFromRoot, extractResumeDetail, renderScoreBreakdown, sortResultsByScore, buildSortedResultGroups, mergeScoredAndSkippedResults, nextUnreadHighScoreBatch, unreadPriority, suitableRoleIds, filterResults, roleBadgeMarkup, renderFilterMenu, renderResultItem, parseOutreachHistoryDate, isRecentActiveOutreachText, skipReasonFromSignals, skipPresentation, remarkTextFromCard, remarkSkipTooltip, tagTooltip, resultTagTone, tagColor, isQualifiedItem, scoreColor, scoreTooltip, escapeHtml});
     return;
   }
 

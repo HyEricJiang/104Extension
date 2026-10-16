@@ -44,7 +44,7 @@ test('面板直接提供綜合篩選，無職缺選單；掃描提示可正常�
   const panel = doc.body.children.find(n=>n.id==='resume-screening-104-panel');
   assert.match(panel.innerHTML,/綜合篩選 Java／C#／SA／QA/);
   assert.doesNotMatch(panel.innerHTML,/<select|data-role|請選擇/);
-  assert.match(panel.innerHTML,/v5\.0\.9/);
+  assert.match(panel.innerHTML,/v5\.1\.0/);
   api.setScanningIndicator(true);assert.equal(panel.parts['[data-screening-casting]'].style.display,'flex');
   api.setScanningIndicator(false);assert.equal(panel.parts['[data-screening-casting]'].style.display,'none');
 });
@@ -78,4 +78,22 @@ test('評分回應若退回單職位，停止使用結果', async () => {
 test('數量錯誤與錯誤履歷ID停止顯示，避免把結果套到別人', async () => {
   await assert.rejects(harness(()=>({ok:true,screeningMode:'comprehensive',results:[]})).api.rankCandidates([candidate(0)]),/筆數不符/);
   await assert.rejects(harness(()=>({ok:true,screeningMode:'comprehensive',results:[{resumeCode:'wrong',status:'ranked'}]})).api.rankCandidates([candidate(0)]),/履歷對應不符/);
+});
+
+test('未讀批次先推薦再人工覆核，類內降冪並跳過已讀、排除與前端跳過',()=>{
+ const {api}=harness(()=>health);
+ const items=[{resumeCode:'review',status:'review_required',score:99,profileUrl:'x'},{resumeCode:'low',status:'ranked',score:12,profileUrl:'x'},{resumeCode:'high',status:'ranked',score:20,profileUrl:'x'},{resumeCode:'skip',status:'excluded',clientSkipped:true,score:100,profileUrl:'x'}];
+ assert.deepEqual(Array.from(api.nextUnreadHighScoreBatch(items,new Set(),2),item=>item.resumeCode),['high','low']);
+ assert.deepEqual(Array.from(api.nextUnreadHighScoreBatch(items,new Set(['high']),15),item=>item.resumeCode),['low','review']);
+});
+test('篩選預設全部、同維度複選OR、狀態與職位交集；待確認不冒充適合',()=>{
+ const {api}=harness(()=>health);
+ const items=[{resumeCode:'sa',status:'ranked',score:10,recommendedRoles:[{id:'system-analyst'}]},{resumeCode:'java',status:'review_required',score:20,displayTags:['#適合Java']},{resumeCode:'pending',status:'review_required',score:30,displayTags:['#待確認SA']},{resumeCode:'net',status:'excluded',score:0,recommendedRoles:[{id:'csharp-dotnet-programmer'}]}];
+ assert.equal(api.filterResults(items).length,4);
+ assert.deepEqual(Array.from(api.filterResults(items,[],['sa','java']),item=>item.resumeCode),['java','sa']);
+ assert.deepEqual(Array.from(api.filterResults(items,['review'],['sa','java']),item=>item.resumeCode),['java']);
+ assert.equal(api.filterResults(items,['ranked','review'],[]).length,3);
+ assert.match(api.roleBadgeMarkup(items[0]),/SA/);
+ assert.match(api.roleBadgeMarkup(items[3]),/#f4cccc/);
+ assert.equal(api.suitableRoleIds(items[2]).length,0);
 });
