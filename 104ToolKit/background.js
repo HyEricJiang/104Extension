@@ -1,1 +1,1 @@
-importScripts("tab-scope.js", "output-directory.js", "training-labels.js", "clipboard-policy.js", "collector.js", "pdf-exporter.js", "workflow.js", "classifier.js", "screening-groups.js");
+importScripts("vendor/pdf-lib-1.17.1.min.js", "training-pdf.js", "tab-scope.js", "output-directory.js", "training-labels.js", "clipboard-policy.js", "collector.js", "pdf-exporter.js", "workflow.js", "classifier.js", "screening-groups.js");

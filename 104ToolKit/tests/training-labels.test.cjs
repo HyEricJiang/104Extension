@@ -50,13 +50,11 @@ test('先輸入原因再下標籤，以及快速修改，皆保留最後內容�
  await api.saveReason({idno:'ONLY_REASON'},'尚未分類');
  assert.equal((await api.read({idno:'ONLY_REASON'})).label,'');
  assert.equal(api.trainingFilename('Test',await api.read({idno:'ONLY_REASON'})),null);
- await assert.rejects(api.saveReason({idno:'DRAFT'},'a'.repeat(501)),/500/);
+ await assert.rejects(api.saveReason({idno:'DRAFT'},'a'.repeat(10001)),/10000/);
 });
-test('訓練檔名依姓名、標籤、選填原因排序，過長或特殊字元不會產生無效檔名',()=>{
- const record={label:'系統推薦但不合適',reason:'缺少Java/SQL:實務\n經驗'};
- assert.equal(api.trainingFilename('Test',record),'AI訓練資料_Test_系統推薦但不合適_缺少Java_SQL_實務_經驗.pdf');
- assert.equal(api.trainingFilename('Test',{label:record.label,reason:''}),'AI訓練資料_Test_系統推薦但不合適.pdf');
- const long=api.trainingFilename('測試姓名',{label:record.label,reason:'經驗不足🙂'.repeat(80)});
- assert.ok(Buffer.byteLength(long,'utf8')<=230);
- assert.ok(!long.includes('\uFFFD'));
+test('訓練檔名僅姓名，標籤與原因移至PDF標註頁，原因長度不影響檔名',()=>{
+ const record={label:'系統推薦但不合適',reason:'經驗不足'.repeat(1000)};
+ assert.equal(api.trainingFilename('Test',record),'AI訓練資料_Test.pdf');
+ assert.equal(api.trainingFilename('Test',{...record,reason:''}),'AI訓練資料_Test.pdf');
+ assert.equal(api.trainingFilename('A/B',record),'AI訓練資料_A_B.pdf');
 });

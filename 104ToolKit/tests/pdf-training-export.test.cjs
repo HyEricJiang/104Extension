@@ -44,6 +44,7 @@ function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",
    if(failTraining&&filename.startsWith("AI訓練資料"))throw Error("測試寫入失敗");
    fileWrites.push({filename,data});return{filename,path:`訓練資料/${filename}`,directWrite:true};
  }};
+ context.RecruitingTrainingPdf={prepend:async bytes=>new Uint8Array([...bytes,99])};
  context.TextEncoder=TextEncoder;
  const root=path.join(__dirname,'..');
  for(const file of ['tab-scope.js','training-labels.js','pdf-exporter.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
@@ -56,11 +57,11 @@ test('混合批次：有標籤產生一般與訓練兩版；未標記一版；�
  await h.context.RecruitingPdfExporter.runDownloadRightBatch();
  assert.deepEqual(h.downloads.map(d=>d.filename),[
   '104履歷下載區/Jr.Java PG_Test_104.pdf',
-  '104履歷下載區/AI訓練資料_Test_不應排除應推薦.pdf',
+  '104履歷下載區/AI訓練資料_Test.pdf',
   '104履歷下載區/Jr.Java PG_Test_104.pdf'
  ]);
  assert.ok(h.downloads.every(d=>d.url.startsWith('data:application/pdf')));
- assert.equal(h.downloads[0].url,h.downloads[1].url);
+ assert.notEqual(h.downloads[0].url,h.downloads[1].url);
  assert.equal(h.printCount,2);
  assert.ok(h.context.RecruitingPdfExporter.getState().lastMessage.includes('一般履歷 2 份，AI 訓練資料 1 份'));
 });
@@ -70,7 +71,7 @@ test('停止後不處理下一位，已開始的有標籤履歷仍完成兩個�
  await h.context.ResumeTrainingLabels.save({idno:'TEST1'},'reviewedShouldRecommend');
  await h.context.RecruitingPdfExporter.runDownloadRightBatch();
  assert.equal(h.downloads.length,2);
- assert.ok(h.downloads[1].filename.includes('AI訓練資料_Test_人工審核但需要推薦.pdf'));
+ assert.ok(h.downloads[1].filename.includes('AI訓練資料_Test.pdf'));
  assert.equal(h.printCount,1);
  assert.ok(h.context.RecruitingPdfExporter.getState().lastMessage.includes('已停止'));
 });
@@ -83,14 +84,14 @@ test('不合適群組未標記時只下載一般履歷；所有下載都為PDF',
  assert.ok(h.downloads.every(d=>d.url.startsWith('data:application/pdf')));
 });
 
-test('選擇資料夾後五種標籤皆以固定檔名存入，沿用同一PDF內容',async()=>{
+test('選擇資料夾後五種標籤皆以固定檔名存入，保留一般版並另產生標註版',async()=>{
  for(const [category,label] of Object.entries({systemRecommendedUnsuitable:'系統推薦但不合適',reviewedShouldRecommend:'人工審核但需要推薦',reviewedShouldExclude:'人工審核但應該排除',wronglyExcludedNeedsReview:'不應排除需人工審核',wronglyExcludedShouldRecommend:'不應排除應推薦'})){
   const h=harness({selectedDirectory:true});
   await h.context.ResumeTrainingLabels.save({idno:'TEST1'},category);
   await h.context.RecruitingPdfExporter.runDownloadCurrent();
   assert.equal(h.downloads.length,0);
-  assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104.pdf',`AI訓練資料_Test_${label}.pdf`]);
-  assert.deepEqual(h.fileWrites[0].data,h.fileWrites[1].data);
+  assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104.pdf',`AI訓練資料_Test.pdf`]);
+  assert.notDeepEqual(h.fileWrites[0].data,h.fileWrites[1].data);
   assert.equal(h.printCount,1);
  }
 });
@@ -117,14 +118,14 @@ test('未加入群組時沿用手動前綴，訓練版不帶一般後綴',async(
  const h=harness({selectedDirectory:true,groupTitle:'',prefixMode:'manual'});
  await h.context.ResumeTrainingLabels.save({idno:'TEST1'},'systemRecommendedUnsuitable');
  await h.context.RecruitingPdfExporter.runDownloadCurrent();
- assert.deepEqual(h.fileWrites.map(f=>f.filename),['Manual_Test_104.pdf','AI訓練資料_Test_系統推薦但不合適.pdf']);
+ assert.deepEqual(h.fileWrites.map(f=>f.filename),['Manual_Test_104.pdf','AI訓練資料_Test.pdf']);
 });
 
-test('原因直接加在訓練檔名最後；只有原因沒有標籤時只產生一般版',async()=>{
+test('原因移至標註頁，訓練檔名不帶標籤與原因；只有原因沒有標籤時只產生一般版',async()=>{
  const h=harness({selectedDirectory:true});
  await h.context.ResumeTrainingLabels.save({idno:'TEST1'},'systemRecommendedUnsuitable');
  await h.context.ResumeTrainingLabels.saveReason({idno:'TEST1'},'缺乏Java實務經驗');
  await h.context.ResumeTrainingLabels.saveReason({idno:'TEST2'},'待確認');
  await h.context.RecruitingPdfExporter.runDownloadRightBatch();
- assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104.pdf','AI訓練資料_Test_系統推薦但不合適_缺乏Java實務經驗.pdf','Jr.Java PG_Test_104.pdf','Jr.Java PG_Test_104.pdf']);
+ assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104.pdf','AI訓練資料_Test.pdf','Jr.Java PG_Test_104.pdf','Jr.Java PG_Test_104.pdf']);
 });

@@ -7,8 +7,7 @@
     wronglyExcludedNeedsReview: "不應排除需人工審核",
     wronglyExcludedShouldRecommend: "不應排除應推薦"
   });
-  const MAX_REASON_LENGTH = 500;
-  const MAX_FILENAME_BYTES = 230;
+  const MAX_REASON_LENGTH = 10000;
   const MAX_NAME_BYTES = 80;
   const pending = new Map();
   const STORAGE_PREFIX = "resume_training_label_v1:";
@@ -64,11 +63,7 @@
   }
   function trainingFilename(name, record) {
     if (!record?.label) return null;
-    const base = `AI訓練資料_${fitUtf8(filenamePart(name), MAX_NAME_BYTES)}_${filenamePart(record.label)}`;
-    // 預留 PDF 副檔名及重名序號空間，避免中文原因超過磁碟檔名長度。
-    const bytes = Array.from(base).reduce((total, char) => total + utf8Size(char), 0);
-    const reason = fitUtf8(filenamePart(record.reason), Math.max(0, MAX_FILENAME_BYTES - bytes - 5));
-    return base + (reason ? `_${reason}` : "") + ".pdf";
+    return `AI訓練資料_${fitUtf8(filenamePart(name), MAX_NAME_BYTES)}.pdf`;
   }
   async function remove(info) {
     // 只刪除這份履歷的標記，不影響其他履歷或已匯出的 PDF。

@@ -413,7 +413,8 @@ async function runIdnoExportJob(items, jobTitle) {
       if (label?.label) {
         const trainingFilename = globalThis.ResumeTrainingLabels.trainingFilename(name, label);
         const trainingPath = subdir ? normalizeSubdir(subdir) + trainingFilename : trainingFilename;
-        await downloadPdfBytes(pdfBytes, trainingPath, outputTarget);
+        const trainingBytes = await globalThis.RecruitingTrainingPdf.prepend(pdfBytes, debuggee, name, label);
+        await downloadPdfBytes(trainingBytes, trainingPath, outputTarget);
         report.trainingFiles++;
       }
       state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}${label?.label ? "（含 AI 訓練版本）" : ""}`;

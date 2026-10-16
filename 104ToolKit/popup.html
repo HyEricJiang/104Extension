@@ -33,8 +33,8 @@
           <button type="button" class="classification-button" data-category="wronglyExcludedShouldRecommend" aria-pressed="false" disabled>不應排除應推薦</button>
         </div>
         <label class="field" for="trainingReason"><span>目前履歷的錯位原因（選填）</span></label>
-        <textarea id="trainingReason" rows="3" maxlength="500" placeholder="例如：最近工作以客服為主，缺少此職缺需要的 Java 開發經驗" aria-describedby="reasonHint reasonStatus" disabled></textarea>
-        <p id="reasonHint" class="helper-text">輸入即自動儲存，可隨時修改或清空。原因會加在訓練檔名最後；檔名過長時會縮短原因，這裡保留完整內容。</p>
+        <textarea id="trainingReason" rows="3" maxlength="10000" placeholder="例如：最近工作以客服為主，缺少此職缺需要的 Java 開發經驗" aria-describedby="reasonHint reasonStatus" disabled></textarea>
+        <p id="reasonHint" class="helper-text">輸入即自動儲存，可隨時修改或清空。標籤與完整原因會放在 AI 訓練版的標註首頁，過長時自動換頁，不再放入檔名。</p>
         <p id="reasonStatus" class="status-message" aria-live="polite"></p>
         <button id="removeTrainingLabel" type="button" class="button button-secondary button-block" disabled>移除標籤與原因</button>
         <p id="classificationStatus" class="status-message" aria-live="polite">正在讀取目前分頁…</p>
@@ -115,7 +115,7 @@
         <span class="scope-badge">本頁往右</span>
       </div>
       <p class="section-copy">只處理本頁及右側連續的 104 履歷；遇到其他網頁即停止。拖曳分頁調整範圍後再開始。</p>
-      <p class="helper-text">每份履歷依 Chrome 群組命名；有訓練標籤時，另存一份「AI訓練資料_姓名_標籤_原因.pdf」。不需提供分類清單。</p>
+      <p class="helper-text">每份履歷依 Chrome 群組命名；有訓練標籤時，另存一份「AI訓練資料_姓名.pdf（內含標註頁）」。不需提供分類清單。</p>
       <button id="startWorkflow" class="button button-primary button-block">
         <span>複製並匯出本頁往右（含本頁）</span>
         <span aria-hidden="true">→</span>
