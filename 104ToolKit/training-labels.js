@@ -7,6 +7,10 @@
     wronglyExcludedNeedsReview: "不應排除需人工審核",
     wronglyExcludedShouldRecommend: "不應排除應推薦"
   });
+  const MAX_REASON_LENGTH = 500;
+  const MAX_FILENAME_BYTES = 230;
+  const MAX_NAME_BYTES = 80;
+  const pending = new Map();
   const STORAGE_PREFIX = "resume_training_label_v1:";
 
   function identity(info) {
@@ -17,19 +21,58 @@
   async function read(info) {
     const key = STORAGE_PREFIX + identity(info);
     const stored = (await chrome.storage.local.get(key))[key];
-    return stored && Object.prototype.hasOwnProperty.call(CATEGORIES, stored.categoryId)
-      ? { ...stored, label: CATEGORIES[stored.categoryId] } : null;
+    if (!stored) return null;
+    if (stored.categoryId !== null && !Object.prototype.hasOwnProperty.call(CATEGORIES, stored.categoryId)) return null;
+    return { ...stored, label: CATEGORIES[stored.categoryId] || "", reason: typeof stored.reason === "string" ? stored.reason : "" };
+  }
+  function update(info, change) {
+    const resumeKey = identity(info);
+    const work = (pending.get(resumeKey) || Promise.resolve()).catch(() => {}).then(async () => {
+      const current = await read(info);
+      const record = { resumeKey, categoryId: current?.categoryId ?? null, reason: current?.reason || "", ...change, updatedAt: new Date().toISOString() };
+      record.label = CATEGORIES[record.categoryId] || "";
+      await chrome.storage.local.set({ [STORAGE_PREFIX + resumeKey]: record });
+      return record;
+    });
+    pending.set(resumeKey, work);
+    work.finally(() => { if (pending.get(resumeKey) === work) pending.delete(resumeKey); }).catch(() => {});
+    return work;
   }
   async function save(info, categoryId) {
     if (!Object.prototype.hasOwnProperty.call(CATEGORIES, categoryId)) throw new Error("不支援這個分類選項。");
-    const resumeKey = identity(info);
-    const record = { resumeKey, categoryId, label: CATEGORIES[categoryId], updatedAt: new Date().toISOString() };
-    // 每份履歷使用獨立鍵值，避免不同分頁同時標記時覆蓋彼此。
-    await chrome.storage.local.set({ [STORAGE_PREFIX + resumeKey]: record });
-    return record;
+    return update(info, { categoryId });
+  }
+  async function saveReason(info, reason) {
+    if (typeof reason !== "string" || reason.length > MAX_REASON_LENGTH) throw new Error(`錯位原因請在 ${MAX_REASON_LENGTH} 字以內。`);
+    return update(info, { reason: reason.trim() });
+  }
+  function utf8Size(char) {
+    const code = char.codePointAt(0);
+    return code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
+  }
+  function fitUtf8(text, budget) {
+    let result = "";
+    for (const char of text) {
+      const size = utf8Size(char);
+      if (budget < size) break;
+      result += char; budget -= size;
+    }
+    return result;
+  }
+  function filenamePart(text) {
+    return String(text || "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").replace(/\s+/g, " ").trim();
+  }
+  function trainingFilename(name, record) {
+    if (!record?.label) return null;
+    const base = `AI訓練資料_${fitUtf8(filenamePart(name), MAX_NAME_BYTES)}_${filenamePart(record.label)}`;
+    // 預留 PDF 副檔名及重名序號空間，避免中文原因超過磁碟檔名長度。
+    const bytes = Array.from(base).reduce((total, char) => total + utf8Size(char), 0);
+    const reason = fitUtf8(filenamePart(record.reason), Math.max(0, MAX_FILENAME_BYTES - bytes - 5));
+    return base + (reason ? `_${reason}` : "") + ".pdf";
   }
   async function remove(info) {
     // 只刪除這份履歷的標記，不影響其他履歷或已匯出的 PDF。
+    await (pending.get(identity(info)) || Promise.resolve()).catch(() => {});
     await chrome.storage.local.remove(STORAGE_PREFIX + identity(info));
   }
 function parseResumeInfoFromUrl(url) {
@@ -51,7 +94,7 @@ function parseResumeInfoFromUrl(url) {
     return null;
   } catch (_) { return null; }
 }
-  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, remove });
+  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, saveReason, trainingFilename, MAX_REASON_LENGTH, remove });
   globalThis.ResumeTrainingLabels = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

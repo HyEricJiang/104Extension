@@ -31,3 +31,32 @@ test('移除只清除此履歷，重複移除安全且不影響其他標記',asy
  assert.equal((await api.read({idno:'REMOVE_B'})).label,'人工審核但應該排除');
  assert.equal(JSON.stringify(stored.resume_training_last_export_v1),exportsBefore);
 });
+
+test('舊標籤沒有原因可正常讀取；更換標籤保留原因，清空原因保留標籤',async()=>{
+ stored['resume_training_label_v1:search:LEGACY']={categoryId:'systemRecommendedUnsuitable'};
+ assert.equal((await api.read({idno:'LEGACY'})).reason,'');
+ await api.saveReason({idno:'LEGACY'},'缺乏Java經驗');
+ await api.save({idno:'LEGACY'},'reviewedShouldExclude');
+ assert.equal((await api.read({idno:'LEGACY'})).reason,'缺乏Java經驗');
+ await api.saveReason({idno:'LEGACY'},'');
+ assert.equal((await api.read({idno:'LEGACY'})).reason,'');
+ assert.equal((await api.read({idno:'LEGACY'})).categoryId,'reviewedShouldExclude');
+});
+test('先輸入原因再下標籤，以及快速修改，皆保留最後內容且不影響其他履歷',async()=>{
+ await Promise.all([api.saveReason({idno:'DRAFT'},'原'),api.saveReason({idno:'DRAFT'},'修改後'),api.save({idno:'DRAFT'},'reviewedShouldRecommend')]);
+ const draft=await api.read({idno:'DRAFT'});
+ assert.equal(draft.reason,'修改後');
+ assert.equal(draft.categoryId,'reviewedShouldRecommend');
+ await api.saveReason({idno:'ONLY_REASON'},'尚未分類');
+ assert.equal((await api.read({idno:'ONLY_REASON'})).label,'');
+ assert.equal(api.trainingFilename('Test',await api.read({idno:'ONLY_REASON'})),null);
+ await assert.rejects(api.saveReason({idno:'DRAFT'},'a'.repeat(501)),/500/);
+});
+test('訓練檔名依姓名、標籤、選填原因排序，過長或特殊字元不會產生無效檔名',()=>{
+ const record={label:'系統推薦但不合適',reason:'缺少Java/SQL:實務\n經驗'};
+ assert.equal(api.trainingFilename('Test',record),'AI訓練資料_Test_系統推薦但不合適_缺少Java_SQL_實務_經驗.pdf');
+ assert.equal(api.trainingFilename('Test',{label:record.label,reason:''}),'AI訓練資料_Test_系統推薦但不合適.pdf');
+ const long=api.trainingFilename('測試姓名',{label:record.label,reason:'經驗不足🙂'.repeat(80)});
+ assert.ok(Buffer.byteLength(long,'utf8')<=230);
+ assert.ok(!long.includes('\uFFFD'));
+});

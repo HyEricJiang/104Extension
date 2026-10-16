@@ -32,7 +32,11 @@
           <button type="button" class="classification-button" data-category="wronglyExcludedNeedsReview" aria-pressed="false" disabled>不應排除需人工審核</button>
           <button type="button" class="classification-button" data-category="wronglyExcludedShouldRecommend" aria-pressed="false" disabled>不應排除應推薦</button>
         </div>
-        <button id="removeTrainingLabel" type="button" class="button button-secondary button-block" disabled>移除標籤</button>
+        <label class="field" for="trainingReason"><span>目前履歷的錯位原因（選填）</span></label>
+        <textarea id="trainingReason" rows="3" maxlength="500" placeholder="例如：最近工作以客服為主，缺少此職缺需要的 Java 開發經驗" aria-describedby="reasonHint reasonStatus" disabled></textarea>
+        <p id="reasonHint" class="helper-text">輸入即自動儲存，可隨時修改或清空。原因會加在訓練檔名最後；檔名過長時會縮短原因，這裡保留完整內容。</p>
+        <p id="reasonStatus" class="status-message" aria-live="polite"></p>
+        <button id="removeTrainingLabel" type="button" class="button button-secondary button-block" disabled>移除標籤與原因</button>
         <p id="classificationStatus" class="status-message" aria-live="polite">正在讀取目前分頁…</p>
       </div>
     </section>
@@ -98,7 +102,7 @@
           <p id="trainingFilenamePreview" class="helper-text" hidden></p>
           <small id="groupHint">正在讀取目前分頁群組…</small>
         </div>
-        <button id="saveSettings" class="button button-secondary button-block">儲存設定</button>
+
       </div>
     </section>
 
@@ -111,7 +115,7 @@
         <span class="scope-badge">本頁往右</span>
       </div>
       <p class="section-copy">先整理聯絡資料並複製，再依照上方設定匯出所有履歷。</p>
-      <p class="helper-text">每份履歷依 Chrome 群組命名；有訓練標籤時，另存一份「AI訓練資料_標籤_姓名.pdf」。不需提供分類清單。</p>
+      <p class="helper-text">每份履歷依 Chrome 群組命名；有訓練標籤時，另存一份「AI訓練資料_姓名_標籤_原因.pdf」。不需提供分類清單。</p>
       <button id="startWorkflow" class="button button-primary button-block">
         <span>開始複製並匯出</span>
         <span aria-hidden="true">→</span>
@@ -176,6 +180,7 @@
     <footer>只會在 vip.104.com.tw 執行；個資不會傳送到外部服務。</footer>
   </main>
   <script src="output-directory.js"></script>
+  <script src="training-labels.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

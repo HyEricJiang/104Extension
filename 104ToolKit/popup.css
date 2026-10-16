@@ -220,3 +220,7 @@ footer { padding: 12px 4px 0; color: var(--ui-muted); text-align: center; font-s
 .job-group-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 8px 0 12px; }
 .job-group-controls select { min-height: 44px; }
 #jobCurrentGroup { max-width: 150px; white-space: normal; overflow-wrap: anywhere; }
+
+#trainingReason { box-sizing: border-box; width: 100%; min-height: 88px; padding: 10px 12px; resize: vertical; font: inherit; line-height: 1.5; color: var(--ui-ink); background: var(--ui-surface); border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius); }
+#trainingReason:focus-visible { outline: 2px solid var(--ui-navy); outline-offset: 2px; }
+#trainingReason:disabled { opacity: .55; }

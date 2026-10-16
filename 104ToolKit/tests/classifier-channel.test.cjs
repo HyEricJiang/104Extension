@@ -115,3 +115,16 @@ test('專用連線移除標籤後恢復未標記，不呼叫分組 API',async()=
  const state=await request(worker,{type:'TOOLKIT_GET_CLASSIFIER_STATE'});
  assert.equal(state.trainingLabel,'');
 });
+
+test('完整背景通道可修改原因、查看目前履歷標籤與原因，拒絕寫到已切換履歷',async()=>{
+ const worker=loadWorker();
+ const state=await request(worker,{type:'TOOLKIT_GET_CLASSIFIER_STATE'});
+ await request(worker,{type:'CLASSIFY_CURRENT_TAB',categoryId:'systemRecommendedUnsuitable'});
+ const result=await request(worker,{type:'TOOLKIT_SAVE_TRAINING_REASON',resumeKey:state.resumeKey,reason:'經驗不足'});
+ assert.equal(result.ok,true);
+ const current=await request(worker,{type:'TOOLKIT_GET_CLASSIFIER_STATE'});
+ assert.equal(current.reason,'經驗不足');
+ assert.equal(current.trainingLabel,'系統推薦但不合適');
+ const wrong=await request(worker,{type:'TOOLKIT_SAVE_TRAINING_REASON',resumeKey:'search:OTHER',reason:'不可寫入'});
+ assert.equal(wrong.ok,false);
+});

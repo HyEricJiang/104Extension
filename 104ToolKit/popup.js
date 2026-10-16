@@ -34,11 +34,16 @@ let canClassify = false;
 let hasTrainingLabel = false;
 let currentTrainingLabel = "";
 let canGroupJob = false;
+let currentResumeKey = "";
+let reasonWrite = Promise.resolve();
+let reasonVersion = 0;
+let settingsVersion = 0;
 
 function updateClassificationAvailability() {
   document.querySelectorAll(".classification-button").forEach(button => {
     button.disabled = classificationBusy || !canClassify;
   });
+  byId("trainingReason").disabled = classificationBusy || !canClassify;
   byId("removeTrainingLabel").disabled = classificationBusy || !canClassify || !hasTrainingLabel;
   [ui.startWorkflow, ui.copyCurrent, ui.copyRight, ui.downloadCurrent, ui.downloadRight].forEach(button => {
     button.disabled = jobsRunning || classificationBusy;
@@ -61,6 +66,8 @@ async function refreshClassification() {
   const result = await sendClassification({ type: "TOOLKIT_GET_CLASSIFIER_STATE" });
   if (!result?.ok) throw new Error(result?.error || "無法讀取分類。");
   canClassify = result.canClassify;
+  currentResumeKey = result.resumeKey || "";
+  byId("trainingReason").value = result.reason || "";
   currentTrainingLabel = result.trainingLabel || "";
   hasTrainingLabel = Boolean(currentTrainingLabel);
   canGroupJob = result.canGroupJob;
@@ -90,6 +97,7 @@ async function refreshClassification() {
 }
 
 async function classifyCurrent(categoryId) {
+  await reasonWrite;
   classificationBusy = true;
   updateClassificationAvailability();
   byId("classificationStatus").textContent = "正在保存此履歷的訓練分類…";
@@ -108,6 +116,7 @@ async function classifyCurrent(categoryId) {
 
 async function removeCurrentTrainingLabel() {
   if (classificationBusy || !canClassify || !hasTrainingLabel) return;
+  await reasonWrite;
   classificationBusy = true;
   updateClassificationAvailability();
   byId("classificationStatus").textContent = "正在移除此履歷的訓練標籤…";
@@ -115,6 +124,7 @@ async function removeCurrentTrainingLabel() {
     const result = await sendClassification({ type: "TOOLKIT_REMOVE_TRAINING_LABEL" });
     if (!result?.ok) throw new Error(result?.error || "移除標籤失敗。");
     await refreshClassification();
+    byId("reasonStatus").textContent = "標籤與原因已移除";
     byId("classificationStatus").textContent = "已移除標籤；此履歷恢復為尚未標記，職缺群組保持原設定。";
   } catch (error) {
     byId("classificationStatus").textContent = `移除失敗：${errorText(error)}`;
@@ -125,6 +135,7 @@ async function removeCurrentTrainingLabel() {
 }
 
 async function addCurrentToJobGroup() {
+  await reasonWrite;
   const groupTitle = byId("jobGroupSelect").value;
   if (!groupTitle || classificationBusy || jobsRunning) return;
   classificationBusy = true;
@@ -300,7 +311,7 @@ function buildPreviewFilename() {
   const suffix = byId("filenameSuffix").value.trim();
   const prefix = groupInfo.title || (mode === "none" ? "" : manualPrefix);
   byId("trainingFilenamePreview").hidden = !currentTrainingLabel;
-  byId("trainingFilenamePreview").textContent = currentTrainingLabel ? `AI訓練資料_${currentTrainingLabel}_王小明.pdf` : "";
+  byId("trainingFilenamePreview").textContent = currentTrainingLabel ? ResumeTrainingLabels.trainingFilename("王小明", { label: currentTrainingLabel, reason: byId("trainingReason").value }) : "";
   byId("filenamePreview").textContent = [prefix, "王小明", suffix].filter(Boolean).join("_") + ".pdf";
   byId("groupHint").textContent = groupInfo.hasGroup
     ? `目前群組：${groupInfo.title}`
@@ -323,6 +334,8 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
+  const version = ++settingsVersion;
+  ui.settingsStatus.textContent = "儲存中…";
   const settings = {
     subdir: legacySubdir,
     filenamePrefixMode: byId("prefixMode").value,
@@ -333,13 +346,29 @@ async function saveSettings() {
   };
   await chrome.storage.local.set({ settings });
   await send({ cmd: "applySettings" });
-  ui.settingsStatus.textContent = "已儲存";
+  if (version !== settingsVersion) return;
+  ui.settingsStatus.textContent = "已自動儲存";
   ui.settingsStatus.classList.add("status-success");
 }
 
 function markSettingsDirty() {
-  ui.settingsStatus.textContent = "尚未儲存";
-  ui.settingsStatus.classList.remove("status-success");
+  saveSettings().catch(error => {
+    ui.settingsStatus.textContent = `儲存失敗：${errorText(error)}，請重新調整後重試。`;
+    ui.settingsStatus.classList.remove("status-success");
+  });
+}
+function saveCurrentReason() {
+  const version = ++reasonVersion;
+  const reason = byId("trainingReason").value;
+  byId("reasonStatus").textContent = "儲存中…";
+  buildPreviewFilename();
+  // 每次輸入即送至背景保存，不以計時器延後，避免關閉 popup 遺失尚未送出的內容。
+  reasonWrite = sendClassification({ type: "TOOLKIT_SAVE_TRAINING_REASON", resumeKey: currentResumeKey, reason }).then(result => {
+    if (!result?.ok) throw new Error(result?.error || "原因儲存失敗。");
+    if (version === reasonVersion) byId("reasonStatus").textContent = reason.trim() ? "原因已自動儲存" : "原因已清空";
+  }).catch(error => {
+    if (version === reasonVersion) byId("reasonStatus").textContent = `儲存失敗：${errorText(error)}`;
+  });
 }
 
 async function startCopy(type) {
@@ -367,6 +396,7 @@ async function launchExport(action) {
 }
 
 async function startPdf(cmd) {
+  await reasonWrite;
   await saveSettings();
   const response = await launchExport(cmd);
   if (!response?.ok) ui.pdfStatus.textContent = `啟動失敗：${response?.error || "未知錯誤"}`;
@@ -400,6 +430,7 @@ function bindActions() {
   ui.toggleCopyPanel.addEventListener("click", () => togglePanel("copyPanel"));
   ui.toggleExportPanel.addEventListener("click", () => togglePanel("exportPanel"));
   ui.startWorkflow.addEventListener("click", async () => {
+    await reasonWrite;
     await saveSettings();
     const response = await launchExport("combined");
     if (!response?.ok) {
@@ -414,7 +445,8 @@ function bindActions() {
   ui.downloadCurrent.addEventListener("click", () => startPdf("downloadCurrent"));
   ui.downloadRight.addEventListener("click", () => startPdf("downloadRight"));
   ui.stopPdf.addEventListener("click", () => send({ cmd: "stopBatch" }));
-  byId("saveSettings").addEventListener("click", saveSettings);
+  byId("trainingReason").addEventListener("input", event => { if (!event.isComposing) saveCurrentReason(); });
+  byId("trainingReason").addEventListener("compositionend", saveCurrentReason);
 
   ["prefixMode", "filenamePrefix", "filenameSuffix"].forEach((id) => {
     byId(id).addEventListener("input", () => {

@@ -418,13 +418,13 @@ async function runIdnoExportJob(items, jobTitle) {
       regularSaved = true;
       report.regularFiles++;
       // 同一份 PDF 同時服務邀約與訓練，避免再次讀取履歷造成內容不一致。
-      if (label) {
-        const trainingFilename = buildFilename("AI訓練資料", sanitizeFilename(label.label), safeName);
+      if (label?.label) {
+        const trainingFilename = globalThis.ResumeTrainingLabels.trainingFilename(name, label);
         const trainingPath = subdir ? normalizeSubdir(subdir) + trainingFilename : trainingFilename;
         await downloadPdfBytes(pdfBytes, trainingPath, outputTarget);
         report.trainingFiles++;
       }
-      state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}${label ? "（含 AI 訓練版本）" : ""}`;
+      state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}${label?.label ? "（含 AI 訓練版本）" : ""}`;
       report.ok++;
     } catch (error) {
       const errMessage = (regularSaved ? "一般履歷已保留，AI 訓練資料儲存失敗：" : "") + (error?.message || String(error));

@@ -132,7 +132,13 @@ async function handleMessage(message) {
     const group = tab?.groupId >= 0 ? await chrome.tabGroups.get(tab.groupId) : null;
     const info = await getResumeInfo(tab);
     const record = info ? await globalThis.ResumeTrainingLabels.read(info) : null;
-    return { ok: true, trainingLabel: record?.label || "", canClassify: Boolean(info), groupTitle: group?.title || "", categories: CONFIG.groups, jobGroups: CONFIG.jobGroups, canGroupJob: isWebTab(tab) };
+    return { ok: true, trainingLabel: record?.label || "", reason: record?.reason || "", resumeKey: info ? globalThis.ResumeTrainingLabels.identity(info) : "", canClassify: Boolean(info), groupTitle: group?.title || "", categories: CONFIG.groups, jobGroups: CONFIG.jobGroups, canGroupJob: isWebTab(tab) };
+  }
+  if (message.type === "TOOLKIT_SAVE_TRAINING_REASON") {
+    const info = await getResumeInfo(tab);
+    if (!info || globalThis.ResumeTrainingLabels.identity(info) !== message.resumeKey) throw new Error("目前履歷已變更，請重新開啟工作台再修改原因。");
+    const record = await globalThis.ResumeTrainingLabels.saveReason(info, message.reason);
+    return { ok: true, reason: record.reason, trainingLabel: record.label };
   }
   if (message.type === "TOOLKIT_GROUP_JOB_TAB") {
     if (!isWebTab(tab)) throw new Error("請先切換到要加入職缺群組的網頁。");
@@ -164,7 +170,7 @@ async function ensureGroupingIdle() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_REMOVE_TRAINING_LABEL"].includes(message?.type)) return false;
+  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_REMOVE_TRAINING_LABEL", "TOOLKIT_SAVE_TRAINING_REASON"].includes(message?.type)) return false;
   handleMessage(message).then(sendResponse).catch((error) => {
     console.error("[104 招募工作台] 分類操作失敗", { message: error.message });
     sendResponse({ ok: false, error: error.message || "分類失敗，請重試。" });
@@ -176,7 +182,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "toolkit-classifier") return;
   port.onMessage.addListener((message) => {
-    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_REMOVE_TRAINING_LABEL"].includes(message?.type)) {
+    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_REMOVE_TRAINING_LABEL", "TOOLKIT_SAVE_TRAINING_REASON"].includes(message?.type)) {
       port.postMessage({ ok: false, error: "不支援這個分類操作。" });
       return;
     }
