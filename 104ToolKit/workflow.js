@@ -62,9 +62,9 @@
     }
   }
 
-  async function runCombinedRight() {
+  async function runCombinedRight(requestedOriginId) {
     await ensureNoOtherJob();
-    const originTabId = await getActiveTabId();
+    const originTabId = requestedOriginId || await getActiveTabId();
     if (!originTabId) throw new Error("找不到目前作用中的分頁。");
 
     await persistAndNotify({
@@ -80,7 +80,8 @@
     try {
       // 先確認目的地，避免複製成功後才發現 PDF 無法儲存。
       await globalThis.RecruitingOutputDirectory.getTarget();
-      await globalThis.RecruitingCollector.startCollection("right");
+      const scopeTargets = await globalThis.RecruitingTabScope.capture(originTabId);
+      await globalThis.RecruitingCollector.startCollection("right", scopeTargets);
       const collectorResult = await globalThis.RecruitingCollector.getState();
       if (state.stopRequested || collectorResult.stopRequested) {
         await persistAndNotify({
@@ -103,7 +104,7 @@
         lastMessage: `步驟 2/2：已複製 ${collectorResult.rows.length} 筆，開始匯出 PDF…`
       });
 
-      await globalThis.RecruitingPdfExporter.runDownloadRightBatch();
+      await globalThis.RecruitingPdfExporter.runDownloadRightBatch(scopeTargets);
       const pdfResult = globalThis.RecruitingPdfExporter.getState();
       if (state.stopRequested) {
         await persistAndNotify({
@@ -169,7 +170,7 @@
       try {
         await ensureNoOtherJob();
         sendResponse({ ok: true });
-        runCombinedRight().catch((error) => {
+        runCombinedRight(message.originTabId).catch((error) => {
           console.error("[104 招募工作台] 無法啟動工作流", error);
         });
       } catch (error) {

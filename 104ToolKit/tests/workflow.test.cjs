@@ -13,6 +13,7 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
   const storage = {};
   const listeners = [];
   const calls = [];
+  let collectedScope, exportedScope;
   const collectorState = { running: false, stopRequested: false, rows };
   const pdfState = { running: false, stopRequested: false, lastMessage: "完成：成功 1/1" };
 
@@ -21,6 +22,7 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
     setTimeout,
     clearTimeout,
     URL,
+    RecruitingTabScope: {capture: async originId => {calls.push(["scope",originId]);return [{id:originId}];}},
     RecruitingOutputDirectory: { getTarget: async () => { calls.push(["permission"]); if (permissionError) throw Error("資料夾需要授權"); return null; } },
     chrome: {
       action: { setBadgeText: async ({text}) => calls.push(["badge", text]), setBadgeBackgroundColor: async () => {}, setTitle: async () => {} },
@@ -58,7 +60,8 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
       async getState() {
         return { ...collectorState };
       },
-      async startCollection(mode) {
+      async startCollection(mode, targets) {
+        collectedScope = targets;
         calls.push(["collect", mode]);
       },
       async pause() {
@@ -70,7 +73,8 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
       getState() {
         return { ...pdfState };
       },
-      async runDownloadRightBatch() {
+      async runDownloadRightBatch(targets) {
+        exportedScope = targets;
         calls.push(["export", "right"]);
         if (pdfFailure) { pdfState.exportSummary = { fail: 1 }; pdfState.lastMessage = "部分 PDF 匯出失敗"; }
       },
@@ -93,7 +97,7 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
     });
   }
 
-  return { calls, dispatch, storage };
+  return { calls, dispatch, storage, get scopes(){return [collectedScope,exportedScope];} };
 }
 
 async function waitForWorkflowToSettle(harness) {
@@ -152,4 +156,14 @@ test("完成複製後仍顯示匯出進度，PDF 失敗不報完成", async () =
   assert.match(state.error, /PDF 匯出失敗/);
   assert.ok(h.calls.some(([name, text]) => name === "badge" && text === "2/2"));
   assert.ok(!h.calls.some(([name, text]) => name === "badge" && text === "OK"));
+});
+
+test("工作流固定指定起點，收集與匯出共用同一份範圍，不以收集後作用分頁重算",async()=>{
+ const h=createHarness();
+ await h.dispatch({type:'TOOLKIT_START_COMBINED_RIGHT',originTabId:42});
+ const state=await waitForWorkflowToSettle(h);
+ assert.equal(state.phase,'done');
+ assert.ok(h.calls.some(call=>call[0]==='scope'&&call[1]===42));
+ assert.strictEqual(h.scopes[0],h.scopes[1]);
+ assert.equal(h.scopes[0][0].id,42);
 });

@@ -46,7 +46,7 @@ function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",
  }};
  context.TextEncoder=TextEncoder;
  const root=path.join(__dirname,'..');
- for(const file of ['training-labels.js','pdf-exporter.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
+ for(const file of ['tab-scope.js','training-labels.js','pdf-exporter.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
  return {context,downloads,fileWrites,get printCount(){return printCount;}};
 }
 

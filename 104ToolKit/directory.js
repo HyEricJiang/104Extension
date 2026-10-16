@@ -15,7 +15,7 @@ async function startPendingExport() {
   if (!commands[action] || started) return;
   await RecruitingOutputDirectory.getTarget();
   await returnToResume();
-  const result = await chrome.runtime.sendMessage(commands[action]);
+  const result = await chrome.runtime.sendMessage({ ...commands[action], originTabId: returnTabId });
   if (!result?.ok) throw new Error(result?.error || "無法開始匯出。");
   started = true;
   authorizeButton.hidden = true;

@@ -216,20 +216,12 @@ async function runDownloadCurrent() {
   await runIdnoExportJob([item], "下載目前履歷");
 }
 
-async function runDownloadRightBatch() {
-  const tabs = await chrome.tabs.query({ currentWindow: true });
-  const active = tabs.find((tab) => tab.active);
-  if (!active) throw new Error("找不到目前分頁（active tab）。");
-
-  const sorted = [...tabs].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  const startIdx = sorted.findIndex((tab) => tab.id === active.id);
-  if (startIdx < 0) throw new Error("無法定位目前分頁位置。");
-
+async function runDownloadRightBatch(scopeTargets) {
+  const targets = scopeTargets || await globalThis.RecruitingTabScope.capture();
   const items = [];
   const seen = new Set();
 
-  for (let i = startIdx; i < sorted.length; i++) {
-    const tab = sorted[i];
+  for (const tab of targets) {
     const url = tab.url || "";
     const isCandidate = is104ResumePage(url) || is104ApplyResumePage(url);
     if (!isCandidate) break;

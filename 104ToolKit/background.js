@@ -1,1 +1,1 @@
-importScripts("output-directory.js", "training-labels.js", "clipboard-policy.js", "collector.js", "pdf-exporter.js", "workflow.js", "classifier.js", "screening-groups.js");
+importScripts("tab-scope.js", "output-directory.js", "training-labels.js", "clipboard-policy.js", "collector.js", "pdf-exporter.js", "workflow.js", "classifier.js", "screening-groups.js");

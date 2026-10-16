@@ -378,9 +378,10 @@ async function startCopy(type) {
 }
 
 async function launchExport(action) {
+  const [origin] = await chrome.tabs.query({ active: true, currentWindow: true });
   const output = await RecruitingOutputDirectory.status();
   if (output.selected) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = origin;
     const baseUrl = chrome.runtime.getURL("directory.html");
     const url = baseUrl + `?returnTab=${tab?.id || ""}&action=${action}`;
     const tabs = await chrome.tabs.query({ currentWindow: true });
@@ -392,7 +393,7 @@ async function launchExport(action) {
     } else await chrome.tabs.create({ url, index: 0 });
     return { ok: true };
   }
-  return send(action === "combined" ? { type: "TOOLKIT_START_COMBINED_RIGHT" } : { cmd: action });
+  return send(action === "combined" ? { type: "TOOLKIT_START_COMBINED_RIGHT", originTabId: origin?.id } : { cmd: action });
 }
 
 async function startPdf(cmd) {

@@ -273,18 +273,15 @@ async function buildTargets(mode) {
     return [activeTab];
   }
 
-  const allTabs = await chrome.tabs.query({ currentWindow: true });
-  return allTabs
-    .filter((t) => t.index >= activeTab.index && is104Url(t.url))
-    .sort((a, b) => a.index - b.index);
+  return globalThis.RecruitingTabScope.capture(activeTab.id);
 }
 
-async function startCollection(mode) {
+async function startCollection(mode, scopeTargets) {
   if (runtimeState.running) {
     throw new Error("目前已有收集流程在執行中");
   }
 
-  const targets = await buildTargets(mode);
+  const targets = scopeTargets || await buildTargets(mode);
   if (!targets.length) {
     throw new Error(mode === "current" ? "本頁不是可收集頁面" : "右側找不到任何 104 VIP 分頁");
   }
