@@ -11,6 +11,13 @@ const CONFIG = Object.freeze({
   groups: Object.freeze(Object.fromEntries(Object.entries(globalThis.ResumeTrainingLabels.CATEGORIES).map(([id, title]) => [id, Object.freeze({ title })]))),
 });
 
+// 在背景載入時記錄版本，供 Popup 辨識仍在執行的舊服務。
+const SERVICE_VERSION = chrome.runtime.getManifest?.().version || "unknown";
+const SUPPORTED_MESSAGES = new Set([
+  "CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB",
+  "TOOLKIT_REMOVE_TRAINING_LABEL", "TOOLKIT_SAVE_TRAINING_REASON"
+]);
+
 // 同一視窗的快速連點依序執行，避免同名群組被重複建立。
 const windowQueues = new Map();
 
@@ -132,7 +139,7 @@ async function handleMessage(message) {
     const group = tab?.groupId >= 0 ? await chrome.tabGroups.get(tab.groupId) : null;
     const info = await getResumeInfo(tab);
     const record = info ? await globalThis.ResumeTrainingLabels.read(info) : null;
-    return { ok: true, trainingLabel: record?.label || "", reason: record?.reason || "", resumeKey: info ? globalThis.ResumeTrainingLabels.identity(info) : "", canClassify: Boolean(info), groupTitle: group?.title || "", categories: CONFIG.groups, jobGroups: CONFIG.jobGroups, canGroupJob: isWebTab(tab) };
+    return { ok: true, serviceVersion: SERVICE_VERSION, capabilities: { trainingReason: true }, trainingLabel: record?.label || "", reason: record?.reason || "", resumeKey: info ? globalThis.ResumeTrainingLabels.identity(info) : "", canClassify: Boolean(info), groupTitle: group?.title || "", categories: CONFIG.groups, jobGroups: CONFIG.jobGroups, canGroupJob: isWebTab(tab) };
   }
   if (message.type === "TOOLKIT_SAVE_TRAINING_REASON") {
     const info = await getResumeInfo(tab);
@@ -170,7 +177,7 @@ async function ensureGroupingIdle() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_REMOVE_TRAINING_LABEL", "TOOLKIT_SAVE_TRAINING_REASON"].includes(message?.type)) return false;
+  if (!SUPPORTED_MESSAGES.has(message?.type)) return false;
   handleMessage(message).then(sendResponse).catch((error) => {
     console.error("[104 招募工作台] 分類操作失敗", { message: error.message });
     sendResponse({ ok: false, error: error.message || "分類失敗，請重試。" });
@@ -182,8 +189,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "toolkit-classifier") return;
   port.onMessage.addListener((message) => {
-    if (!["CLASSIFY_CURRENT_TAB", "TOOLKIT_GET_CLASSIFIER_STATE", "TOOLKIT_GROUP_JOB_TAB", "TOOLKIT_REMOVE_TRAINING_LABEL", "TOOLKIT_SAVE_TRAINING_REASON"].includes(message?.type)) {
-      port.postMessage({ ok: false, error: "不支援這個分類操作。" });
+    if (!SUPPORTED_MESSAGES.has(message?.type)) {
+      port.postMessage({ ok: false, code: "UNSUPPORTED_CLASSIFIER_OPERATION", serviceVersion: SERVICE_VERSION, error: "不支援這個分類操作。請完整更新 104Toolkit，並在 chrome://extensions 重新載入 104 招募工作台。" });
       return;
     }
     handleMessage(message).then((result) => {

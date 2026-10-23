@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const VERSION = require('../manifest.json').version;
 
 function loadWorker() {
   const connections = [];
@@ -16,6 +17,7 @@ function loadWorker() {
       action: actions,
       storage: {local: {get: async key => ({[key]: storage[key]}), set: async value => Object.assign(storage,value), remove: async key => {delete storage[key];}}},
       runtime: {
+        getManifest: () => ({version: VERSION}),
         onInstalled: {addListener: () => {}},
         onMessage: {addListener: fn => messages.push(fn)},
         onConnect: {addListener: fn => connections.push(fn)},
@@ -127,4 +129,15 @@ test('完整背景通道可修改原因、查看目前履歷標籤與原因，�
  assert.equal(current.trainingLabel,'系統推薦但不合適');
  const wrong=await request(worker,{type:'TOOLKIT_SAVE_TRAINING_REASON',resumeKey:'search:OTHER',reason:'不可寫入'});
  assert.equal(wrong.ok,false);
+});
+
+
+test('背景回報實際服務版本與原因能力，未知指令附更新提示', async () => {
+ const worker=loadWorker();
+ const state=await request(worker,{type:'TOOLKIT_GET_CLASSIFIER_STATE'});
+ assert.equal(state.serviceVersion,VERSION);
+ assert.equal(state.capabilities.trainingReason,true);
+ const unsupported=await request(worker,{type:'FUTURE_OPERATION'});
+ assert.equal(unsupported.code,'UNSUPPORTED_CLASSIFIER_OPERATION');
+ assert.match(unsupported.error,/重新載入/);
 });
