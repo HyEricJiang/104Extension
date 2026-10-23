@@ -1,0 +1,5 @@
+# Toolkit 只維護資料夾內最新版，避免重新提交歷史安裝包。
+104[Tt]ool[Kk]it*.zip
+實習生下載整合包.zip
+.DS_Store
+__pycache__/

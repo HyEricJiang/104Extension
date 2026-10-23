@@ -31,6 +31,7 @@ let workflowRunning = false;
 let jobsRunning = false;
 let classificationBusy = false;
 let canClassify = false;
+let reasonServiceReady = false;
 let hasTrainingLabel = false;
 let currentTrainingLabel = "";
 let canGroupJob = false;
@@ -43,7 +44,7 @@ function updateClassificationAvailability() {
   document.querySelectorAll(".classification-button").forEach(button => {
     button.disabled = classificationBusy || !canClassify;
   });
-  byId("trainingReason").disabled = classificationBusy || !canClassify;
+  byId("trainingReason").disabled = classificationBusy || !canClassify || !reasonServiceReady;
   byId("removeTrainingLabel").disabled = classificationBusy || !canClassify || !hasTrainingLabel;
   [ui.startWorkflow, ui.copyCurrent, ui.copyRight, ui.downloadCurrent, ui.downloadRight].forEach(button => {
     button.disabled = jobsRunning || classificationBusy;
@@ -65,6 +66,10 @@ function selectMode(mode) {
 async function refreshClassification() {
   const result = await sendClassification({ type: "TOOLKIT_GET_CLASSIFIER_STATE" });
   if (!result?.ok) throw new Error(result?.error || "無法讀取分類。");
+  const popupVersion = chrome.runtime.getManifest().version;
+  reasonServiceReady = result.capabilities?.trainingReason === true && result.serviceVersion === popupVersion;
+  byId("toolkitVersion").textContent = `工作台 v${popupVersion}／背景 ${result.serviceVersion || "舊版（無版本資訊）"}`;
+  byId("reasonStatus").textContent = reasonServiceReady ? "" : reasonServiceUpdateMessage();
   canClassify = result.canClassify;
   currentResumeKey = result.resumeKey || "";
   byId("trainingReason").value = result.reason || "";
@@ -97,7 +102,7 @@ async function refreshClassification() {
 }
 
 async function classifyCurrent(categoryId) {
-  await reasonWrite;
+  if (!(await ensureReasonSaved())) return;
   classificationBusy = true;
   updateClassificationAvailability();
   byId("classificationStatus").textContent = "正在保存此履歷的訓練分類…";
@@ -116,7 +121,7 @@ async function classifyCurrent(categoryId) {
 
 async function removeCurrentTrainingLabel() {
   if (classificationBusy || !canClassify || !hasTrainingLabel) return;
-  await reasonWrite;
+  if (!(await ensureReasonSaved())) return;
   classificationBusy = true;
   updateClassificationAvailability();
   byId("classificationStatus").textContent = "正在移除此履歷的訓練標籤…";
@@ -135,7 +140,7 @@ async function removeCurrentTrainingLabel() {
 }
 
 async function addCurrentToJobGroup() {
-  await reasonWrite;
+  if (!(await ensureReasonSaved())) return;
   const groupTitle = byId("jobGroupSelect").value;
   if (!groupTitle || classificationBusy || jobsRunning) return;
   classificationBusy = true;
@@ -357,17 +362,45 @@ function markSettingsDirty() {
     ui.settingsStatus.classList.remove("status-success");
   });
 }
+function reasonServiceUpdateMessage() {
+  return "背景服務版本不相容，暫停原因編輯。請完整更新原安裝資料夾的 104Toolkit 檔案，在 chrome://extensions 重新載入「104 招募工作台」，再關閉並重開工作台；仍有問題時請重新啟動 Chrome。請勿移除擴充功能，以免遺失既有標籤。";
+}
+
+async function ensureReasonSaved() {
+  // 寫入失敗時保留文字，避免刷新標籤覆蓋草稿或匯出缺少原因的 PDF。
+  if ((await reasonWrite) !== false) return true;
+  const message = "原因尚未儲存，請先保留輸入文字並處理下標籤頁的錯誤，再重試。";
+  byId("classificationStatus").textContent = message;
+  ui.pdfStatus.textContent = message;
+  ui.workflowMessage.textContent = message;
+  return false;
+}
+
 function saveCurrentReason() {
+  if (!reasonServiceReady) {
+    byId("reasonStatus").textContent = reasonServiceUpdateMessage();
+    return;
+  }
   const version = ++reasonVersion;
   const reason = byId("trainingReason").value;
   byId("reasonStatus").textContent = "儲存中…";
   buildPreviewFilename();
   // 每次輸入即送至背景保存，不以計時器延後，避免關閉 popup 遺失尚未送出的內容。
   reasonWrite = sendClassification({ type: "TOOLKIT_SAVE_TRAINING_REASON", resumeKey: currentResumeKey, reason }).then(result => {
-    if (!result?.ok) throw new Error(result?.error || "原因儲存失敗。");
+    if (!result?.ok) {
+      // 舊背景仍能下標籤，但不認識儲存原因的訊息；直接說明更新方式。
+      if (result?.code === "UNSUPPORTED_CLASSIFIER_OPERATION" || /不支援這個分類操作/.test(result?.error || "")) {
+        reasonServiceReady = false;
+        updateClassificationAvailability();
+        throw new Error(reasonServiceUpdateMessage());
+      }
+      throw new Error(result?.error || "原因儲存失敗。");
+    }
     if (version === reasonVersion) byId("reasonStatus").textContent = reason.trim() ? "原因已自動儲存" : "原因已清空";
+    return true;
   }).catch(error => {
     if (version === reasonVersion) byId("reasonStatus").textContent = `儲存失敗：${errorText(error)}`;
+    return false;
   });
 }
 
@@ -397,7 +430,7 @@ async function launchExport(action) {
 }
 
 async function startPdf(cmd) {
-  await reasonWrite;
+  if (!(await ensureReasonSaved())) return;
   await saveSettings();
   const response = await launchExport(cmd);
   if (!response?.ok) ui.pdfStatus.textContent = `啟動失敗：${response?.error || "未知錯誤"}`;
@@ -431,7 +464,7 @@ function bindActions() {
   ui.toggleCopyPanel.addEventListener("click", () => togglePanel("copyPanel"));
   ui.toggleExportPanel.addEventListener("click", () => togglePanel("exportPanel"));
   ui.startWorkflow.addEventListener("click", async () => {
-    await reasonWrite;
+    if (!(await ensureReasonSaved())) return;
     await saveSettings();
     const response = await launchExport("combined");
     if (!response?.ok) {
