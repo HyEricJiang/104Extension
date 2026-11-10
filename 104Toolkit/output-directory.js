@@ -39,7 +39,7 @@
     if (!(await status()).selected) return null;
     const handle = await getSavedHandle();
     if (!handle || await handle.queryPermission({ mode: "readwrite" }) !== "granted") {
-      throw new Error("所選資料夾需要重新授權，請重新開始匯出並在工具頁授權原資料夾。檔案尚未儲存。");
+      throw new Error("所選資料夾需要重新授權，請到「設定 → 變更資料夾」重新授權原資料夾，再匯出 PDF。檔案尚未儲存。");
     }
     return handle;
   }

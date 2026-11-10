@@ -8,8 +8,12 @@
     current: 0,
     total: 2,
     lastMessage: "待命中",
-    error: ""
+    error: "",
+    firstRow: 0,
+    savedCount: 0
   };
+
+  let starting = false;
 
   function publicState() {
     return { ...state };
@@ -17,7 +21,7 @@
 
   async function persistAndNotify(patch = {}) {
     Object.assign(state, patch);
-    const badge = state.running ? (state.phase === "exporting" ? "2/2" : "1/2") : state.phase === "done" ? "OK" : state.phase === "error" ? "ERR" : state.phase === "stopped" ? "STOP" : "";
+    const badge = state.running ? (state.phase === "exporting" ? "PDF" : "...") : state.phase === "done" ? "OK" : state.phase === "error" ? "ERR" : state.phase === "stopped" ? "STOP" : "";
     await chrome.action.setBadgeText({ text: badge });
     await chrome.action.setBadgeBackgroundColor({ color: state.phase === "error" ? "#ef4444" : state.phase === "done" ? "#22c55e" : "#4f8cff" });
     await chrome.action.setTitle({ title: state.error || state.lastMessage });
@@ -62,79 +66,84 @@
     }
   }
 
-  async function runCombinedRight(requestedOriginId) {
-    await ensureNoOtherJob();
-    const originTabId = requestedOriginId || await getActiveTabId();
-    if (!originTabId) throw new Error("找不到目前作用中的分頁。");
-
+  async function runWorkflow(originTabId, type) {
+    const includePdf = type === "TOOLKIT_START_COMBINED_RIGHT";
+    const currentOnly = type === "TOOLKIT_START_INVITE_CURRENT";
+    const total = includePdf ? 2 : 1;
     await persistAndNotify({
       running: true,
       stopRequested: false,
       phase: "collecting",
       current: 0,
-      total: 2,
-      lastMessage: "步驟 1/2：正在複製本頁往右的聯絡資料…",
-      error: ""
+      total,
+      lastMessage: "正在讀取符合職缺群組的履歷資料…",
+      error: "",
+      firstRow: 0,
+      savedCount: 0
     });
 
     try {
-      // 先確認目的地，避免複製成功後才發現 PDF 無法儲存。
-      await globalThis.RecruitingOutputDirectory.getTarget();
-      const scopeTargets = await globalThis.RecruitingTabScope.capture(originTabId);
-      await globalThis.RecruitingCollector.startCollection("right", scopeTargets);
-      const collectorResult = await globalThis.RecruitingCollector.getState();
-      if (state.stopRequested || collectorResult.stopRequested) {
-        await persistAndNotify({
-          running: false,
-          stopRequested: false,
-          phase: "stopped",
-          current: 1,
-          lastMessage: "已停止；已保留目前完成的複製結果。"
-        });
-        return;
+      const scope = await globalThis.RecruitingTabScope.capture(originTabId);
+      const targets = currentOnly ? scope.slice(0, 1) : scope;
+      const writer = globalThis.RecruitingInvitation;
+      const invitation = await writer.prepare(targets, { requireMatch: !includePdf });
+      if (invitation.contactTargets.length && !state.stopRequested) {
+        await globalThis.RecruitingCollector.startCollection(invitation.contactTargets, invitation.capture);
       }
-      if (!collectorResult.rows?.length) {
-        throw new Error("沒有取得可複製的聯絡資料，因此未繼續匯出 PDF。");
-      }
-
-      await chrome.tabs.update(originTabId, { active: true });
-      await persistAndNotify({
-        phase: "exporting",
-        current: 1,
-        lastMessage: `步驟 2/2：已複製 ${collectorResult.rows.length} 筆，開始匯出 PDF…`
-      });
-
-      await globalThis.RecruitingPdfExporter.runDownloadRightBatch(scopeTargets);
-      const pdfResult = globalThis.RecruitingPdfExporter.getState();
       if (state.stopRequested) {
-        await persistAndNotify({
-          running: false,
-          stopRequested: false,
-          phase: "stopped",
-          current: 2,
-          lastMessage: pdfResult.lastMessage || "已停止 PDF 匯出。"
-        });
+        await persistAndNotify({ running: false, stopRequested: false, phase: "stopped", lastMessage: "已停止登錄。" });
         return;
       }
 
-      if (pdfResult.exportSummary?.fail > 0) throw new Error(pdfResult.lastMessage || "部分 PDF 匯出失敗，已完成檔案會保留。");
+      const rows = invitation.getRows();
+      let registration = "本批沒有符合登錄條件的履歷。";
+      let registrationError = "";
+      if (rows.length) {
+        await persistAndNotify({ phase: "sending", lastMessage: `正在等待 Google 確認 ${rows.length} 筆資料…` });
+        try {
+          const result = await writer.send(rows, invitation.getSkipped(), targets[0].windowId);
+          const lastRow = result.firstRow + result.count - 1;
+          const range = result.count === 1 ? String(result.firstRow) : `${result.firstRow}–${lastRow}`;
+          const skipped = result.skipped ? ` 略過 ${result.skipped} 頁。` : "";
+          registration = `已寫入邀約紀錄 ${result.count} 筆，第 ${range} 列。${skipped}`;
+          await persistAndNotify({ current: 1, lastMessage: registration, firstRow: result.firstRow, savedCount: result.count });
+        } catch (error) {
+          registrationError = error.message;
+          registration = "Google 登錄未確認成功。";
+        }
+      } else if (!includePdf) {
+        registrationError = "沒有取得完整的姓名及 104 履歷編號。";
+      }
+
+      let pdfError = "";
+      let pdfMessage = "";
+      if (includePdf && !state.stopRequested) {
+        await persistAndNotify({ phase: "exporting", current: 1, lastMessage: `${registration} 正在匯出 PDF…` });
+        try {
+          await globalThis.RecruitingPdfExporter.runDownloadRightBatch(targets);
+          const pdf = globalThis.RecruitingPdfExporter.getState();
+          pdfMessage = pdf.lastMessage || "PDF 匯出結束。";
+          if (pdf.exportSummary?.fail) pdfError = "部分 PDF 匯出失敗。";
+        } catch (error) {
+          pdfError = error.message;
+        }
+      }
+      const error = [registrationError, pdfError].filter(Boolean).join(" ");
       await persistAndNotify({
         running: false,
         stopRequested: false,
-        phase: "done",
-        current: 2,
-        lastMessage: `工作流完成：已複製 ${collectorResult.rows.length} 筆；${pdfResult.lastMessage || "PDF 已匯出。"}`,
-        error: ""
+        phase: error ? "error" : state.stopRequested ? "stopped" : "done",
+        current: state.stopRequested ? state.current : total,
+        lastMessage: [registration, pdfMessage].filter(Boolean).join(" "),
+        error
       });
     } catch (error) {
-      const message = String(error?.message || error);
-      console.error("[104 招募工作台] 工作流失敗", { phase: state.phase, message });
       await persistAndNotify({
         running: false,
         stopRequested: false,
         phase: "error",
-        lastMessage: "工作流未完成，請查看錯誤訊息後重試。",
-        error: message
+        lastMessage: "工作流未完成。",
+        error: String(error?.message || error)
       });
     }
   }
@@ -143,7 +152,7 @@
     if (!state.running) return { ok: false, error: "目前沒有執行中的工作流。" };
     await persistAndNotify({
       stopRequested: true,
-      lastMessage: "已收到停止要求，會在目前這份資料處理完成後停止。"
+      lastMessage: "已收到停止要求，已送出的 Google 寫入仍會回報結果。"
     });
     await globalThis.RecruitingCollector.pause();
     globalThis.RecruitingPdfExporter.requestStop();
@@ -154,6 +163,8 @@
     const supportedTypes = new Set([
       "TOOLKIT_GET_WORKFLOW_STATE",
       "TOOLKIT_START_COMBINED_RIGHT",
+      "TOOLKIT_START_INVITE_CURRENT",
+      "TOOLKIT_START_INVITE_RIGHT",
       "TOOLKIT_STOP_WORKFLOW"
     ]);
     if (!supportedTypes.has(message?.type)) return false;
@@ -167,14 +178,21 @@
         sendResponse(await requestStop());
         return;
       }
+      if (starting) {
+        sendResponse({ ok: false, error: "正在啟動工作流，請稍候。" });
+        return;
+      }
+      starting = true;
       try {
         await ensureNoOtherJob();
+        const originTabId = message.originTabId || await getActiveTabId();
+        if (!originTabId) throw new Error("找不到目前作用中的分頁。");
         sendResponse({ ok: true });
-        runCombinedRight(message.originTabId).catch((error) => {
-          console.error("[104 招募工作台] 無法啟動工作流", error);
-        });
+        await runWorkflow(originTabId, message.type);
       } catch (error) {
         sendResponse({ ok: false, error: String(error?.message || error) });
+      } finally {
+        starting = false;
       }
     })();
     return true;

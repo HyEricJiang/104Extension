@@ -168,11 +168,11 @@ function isWebTab(tab) {
   catch (_) { return false; }
 }
 async function ensureGroupingIdle() {
-  // 分組會改變分頁順序；複製或匯出中禁止移動，以維持批次範圍。
+  // 分組會改變分頁順序；登錄或匯出中禁止移動，以維持批次範圍。
   const collector = await globalThis.RecruitingCollector.getState();
   const pdf = globalThis.RecruitingPdfExporter.getState();
   if (collector.running || pdf.running || globalThis.RecruitingWorkflow.getState().running) {
-    throw new Error("請等待目前複製或匯出完成，再加入群組。");
+    throw new Error("請等待目前登錄或匯出完成，再加入群組。");
   }
 }
 

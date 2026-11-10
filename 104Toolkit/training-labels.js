@@ -7,6 +7,7 @@
     wronglyExcludedNeedsReview: "不應排除需人工審核",
     wronglyExcludedShouldRecommend: "不應排除應推薦"
   });
+  const TRAINING_ONLY_GROUP = "不合適";
   const MAX_REASON_LENGTH = 10000;
   const MAX_NAME_BYTES = 80;
   const pending = new Map();
@@ -61,6 +62,17 @@
   function filenamePart(text) {
     return String(text || "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").replace(/\s+/g, " ").trim();
   }
+  function isTrainingOnlyGroup(group) {
+    return String(group || "").trim() === TRAINING_ONLY_GROUP;
+  }
+  function invitationFilename(name, group) {
+    return [filenamePart(group).slice(0, 80), filenamePart(name).slice(0, 80), "104邀約"].filter(Boolean).join("_") + ".pdf";
+  }
+  function exportAnnotation(group, record) {
+    if (record?.label) return record;
+    if (!isTrainingOnlyGroup(group)) return null;
+    return { label: TRAINING_ONLY_GROUP, reason: record?.reason || "" };
+  }
   function trainingFilename(name, record) {
     if (!record?.label) return null;
     return `AI訓練資料_${fitUtf8(filenamePart(name), MAX_NAME_BYTES)}.pdf`;
@@ -89,7 +101,7 @@ function parseResumeInfoFromUrl(url) {
     return null;
   } catch (_) { return null; }
 }
-  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, saveReason, trainingFilename, MAX_REASON_LENGTH, remove });
+  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, saveReason, isTrainingOnlyGroup, invitationFilename, exportAnnotation, trainingFilename, MAX_REASON_LENGTH, remove });
   globalThis.ResumeTrainingLabels = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

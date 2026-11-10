@@ -16,7 +16,7 @@
     running = true;
     const openedCodes = [];
     try {
-      if (globalThis.RecruitingWorkflow?.getState().running || globalThis.RecruitingPdfExporter?.getState().running || (await globalThis.RecruitingCollector?.getState())?.running) return {ok:false,openedCodes,error:'請等待複製或匯出完成後再開啟履歷群組。'};
+      if (globalThis.RecruitingWorkflow?.getState().running || globalThis.RecruitingPdfExporter?.getState().running || (await globalThis.RecruitingCollector?.getState())?.running) return {ok:false,openedCodes,error:'請等待登錄或匯出完成後再開啟履歷群組。'};
       let lastTabId;
       // 保持每類的分數次序，先推薦後人工審核；不改動後端評分或判斷。
       for (const status of ['ranked','review_required']) {

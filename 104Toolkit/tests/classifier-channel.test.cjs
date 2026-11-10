@@ -23,7 +23,7 @@ function loadWorker() {
         onConnect: {addListener: fn => connections.push(fn)},
         sendMessage: async () => ({ok:true})
       },
-      tabs: {query: async () => [{id:17,windowId:7,groupId:-1,url:'https://vip.104.com.tw/search/SearchResumeMaster?idno=TEST1'}],
+      tabs: {onRemoved: {addListener: () => {}}, query: async () => [{id:17,windowId:7,groupId:-1,url:'https://vip.104.com.tw/search/SearchResumeMaster?idno=TEST1'}],
         group: async () => 40},
       tabGroups: {query: async () => groups, update: async (id,group) => groups.push({id,...group})}
     }

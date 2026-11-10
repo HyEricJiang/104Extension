@@ -27,10 +27,10 @@ test('暫時許可失效時只顯示授權按鈕，點擊授權後回原分頁�
  await h.elements.returnToResume.click();
  assert.ok(!h.calls.some(c=>c[0]==='close'));
 });
-test('拒絕授權不會複製、匯出或跳回履歷，仍可再次授權',async()=>{
+test('拒絕授權不會登錄、匯出或跳回履歷，仍可再次授權',async()=>{
  const h=harness({grant:'denied'});await tick();await h.elements.authorizeExport.click();
  assert.deepEqual(h.calls.map(c=>c[0]),['request']);
- assert.match(h.elements.directoryStatus.textContent,/尚未開始複製或匯出/);
+ assert.match(h.elements.directoryStatus.textContent,/尚未開始登錄或匯出/);
  assert.equal(h.elements.authorizeExport.disabled,false);
 });
 test('已授權時自動啟動純PDF匯出，不再次要求選擇資料夾',async()=>{

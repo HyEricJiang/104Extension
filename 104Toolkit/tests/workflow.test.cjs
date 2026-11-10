@@ -9,7 +9,7 @@ const workflowSource = fs.readFileSync(
   "utf8"
 );
 
-function createHarness({ permissionError = false, pdfFailure = false, rows = ["王小明\tmail@example.com\t0900000000\tR001"] } = {}) {
+function createHarness({ permissionError = false, pdfFailure = false, trainingOnly = false, rows = ["王小明\tmail@example.com\t0900000000\tR001"] } = {}) {
   const storage = {};
   const listeners = [];
   const calls = [];
@@ -22,6 +22,15 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
     setTimeout,
     clearTimeout,
     URL,
+    RecruitingInvitation: {
+      prepare: async scope => ({
+        contactTargets: trainingOnly ? [] : scope,
+        capture() {},
+        getRows: () => trainingOnly ? [] : rows,
+        getSkipped: () => 0
+      }),
+      send: async (items) => { calls.push(["submit"]); return { firstRow: 10, count: items.length }; }
+    },
     RecruitingTabScope: {capture: async originId => {calls.push(["scope",originId]);return [{id:originId}];}},
     RecruitingOutputDirectory: { getTarget: async () => { calls.push(["permission"]); if (permissionError) throw Error("資料夾需要授權"); return null; } },
     chrome: {
@@ -60,9 +69,9 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
       async getState() {
         return { ...collectorState };
       },
-      async startCollection(mode, targets) {
+      async startCollection(targets) {
         collectedScope = targets;
-        calls.push(["collect", mode]);
+        calls.push(["collect"]);
       },
       async pause() {
         collectorState.stopRequested = true;
@@ -74,6 +83,7 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
         return { ...pdfState };
       },
       async runDownloadRightBatch(targets) {
+        if (permissionError) throw new Error("資料夾需要授權");
         exportedScope = targets;
         calls.push(["export", "right"]);
         if (pdfFailure) { pdfState.exportSummary = { fail: 1 }; pdfState.lastMessage = "部分 PDF 匯出失敗"; }
@@ -103,7 +113,7 @@ function createHarness({ permissionError = false, pdfFailure = false, rows = ["�
 async function waitForWorkflowToSettle(harness) {
   for (let index = 0; index < 20; index += 1) {
     const result = await harness.dispatch({ type: "TOOLKIT_GET_WORKFLOW_STATE" });
-    if (!result.state.running && ["done", "error", "stopped"].includes(result.state.phase)) {
+    if (!result.state.running && ["done", "submitted", "error", "stopped"].includes(result.state.phase)) {
       return result.state;
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -111,7 +121,7 @@ async function waitForWorkflowToSettle(harness) {
   throw new Error("工作流未在預期時間內完成");
 }
 
-test("整合工作流會先複製、回到起始分頁，再匯出 PDF", async () => {
+test("整合工作流先確認 Google 寫入列，再於背景匯出 PDF", async () => {
   const harness = createHarness();
   const response = await harness.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
   assert.equal(response.ok, true);
@@ -119,42 +129,46 @@ test("整合工作流會先複製、回到起始分頁，再匯出 PDF", async (
   const state = await waitForWorkflowToSettle(harness);
   assert.equal(state.phase, "done");
   assert.deepEqual(
-    harness.calls.filter(([name]) => ["collect", "activate", "export"].includes(name)),
+    harness.calls.filter(([name]) => ["collect", "activate", "export", "submit"].includes(name)),
     [
-      ["collect", "right"],
-      ["activate", 17, true],
+      ["collect"],
+      ["submit"],
       ["export", "right"]
     ]
   );
 });
 
-test("沒有聯絡資料時不會繼續匯出 PDF", async () => {
+test("聯絡資料無法讀取時仍可匯出 PDF", async () => {
   const harness = createHarness({ rows: [] });
   const response = await harness.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
   assert.equal(response.ok, true);
 
   const state = await waitForWorkflowToSettle(harness);
-  assert.equal(state.phase, "error");
-  assert.match(state.error, /沒有取得可複製的聯絡資料/);
-  assert.equal(harness.calls.some(([name]) => name === "export"), false);
+  assert.equal(state.phase, "done");
+  assert.match(state.lastMessage, /沒有符合登錄條件/);
+  assert.equal(harness.calls.some(([name]) => name === "submit"), false);
+  assert.equal(harness.calls.some(([name]) => name === "export"), true);
 });
 
 
-test("資料夾尚未授權時不先複製，也不顯示 OK", async () => {
+test("資料夾尚未授權也會先完成 Google 登錄", async () => {
   const h = createHarness({ permissionError: true });
   await h.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
   const state = await waitForWorkflowToSettle(h);
   assert.equal(state.phase, "error");
-  assert.ok(!h.calls.some(([name]) => name === "collect" || name === "export"));
+  assert.equal(state.savedCount, 1);
+  assert.equal(state.firstRow, 10);
+  assert.match(state.error, /資料夾需要授權/);
   assert.ok(!h.calls.some(([name, text]) => name === "badge" && text === "OK"));
 });
-test("完成複製後仍顯示匯出進度，PDF 失敗不報完成", async () => {
+test("PDF 部分失敗仍提交邀約，並顯示實際的匯出結果", async () => {
   const h = createHarness({ pdfFailure: true });
   await h.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
   const state = await waitForWorkflowToSettle(h);
   assert.equal(state.phase, "error");
-  assert.match(state.error, /PDF 匯出失敗/);
-  assert.ok(h.calls.some(([name, text]) => name === "badge" && text === "2/2"));
+  assert.match(state.lastMessage, /PDF 匯出失敗/);
+  assert.ok(h.calls.some(([name]) => name === "submit"));
+  assert.ok(h.calls.some(([name, text]) => name === "badge" && text === "PDF"));
   assert.ok(!h.calls.some(([name, text]) => name === "badge" && text === "OK"));
 });
 
@@ -166,4 +180,37 @@ test("工作流固定指定起點，收集與匯出共用同一份範圍，不�
  assert.ok(h.calls.some(call=>call[0]==='scope'&&call[1]===42));
  assert.strictEqual(h.scopes[0],h.scopes[1]);
  assert.equal(h.scopes[0][0].id,42);
+});
+
+
+test("只登錄本頁會略過 PDF 檔案設定與匯出", async () => {
+  const h = createHarness({ permissionError: true });
+  await h.dispatch({ type: "TOOLKIT_START_INVITE_CURRENT", originTabId: 42 });
+  const state = await waitForWorkflowToSettle(h);
+  assert.equal(state.phase, "done");
+  assert.deepEqual(h.calls.filter(([name]) => ["collect", "permission", "export", "submit"].includes(name)), [
+    ["collect"], ["submit"]
+  ]);
+});
+
+
+test("不合適批次即使無聯絡資料也匯出訓練 PDF，略過收集及登錄", async () => {
+  const h = createHarness({ trainingOnly: true, rows: [] });
+  await h.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT", originTabId: 42 });
+  const state = await waitForWorkflowToSettle(h);
+  assert.equal(state.phase, "done");
+  assert.deepEqual(h.calls.filter(([name]) => ["collect", "export", "submit"].includes(name)), [["export", "right"]]);
+});
+
+
+test("只登錄本頁往右使用批次寫入，並回報 Google 確認的列號", async () => {
+  const h = createHarness({ rows: ["row1", "row2"] });
+  await h.dispatch({ type: "TOOLKIT_START_INVITE_RIGHT", originTabId: 42 });
+  const state = await waitForWorkflowToSettle(h);
+  assert.equal(state.phase, "done");
+  assert.equal(state.savedCount, 2);
+  assert.match(state.lastMessage, /第 10–11 列/);
+  assert.deepEqual(h.calls.filter(([name]) => ["collect", "activate", "export", "submit"].includes(name)), [
+    ["collect"], ["submit"]
+  ]);
 });

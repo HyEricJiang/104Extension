@@ -1,3 +1,8 @@
-body { width: auto; min-height: 0; }
-.app-shell { max-width: 520px; min-height: 0; margin: 32px auto; }
-#directoryLocation { overflow-wrap: anywhere; color: var(--ui-ink); }
+body { width: auto; min-height: 100vh; background: #f6f8fb; }
+.app-shell { max-width: 480px; margin: 24px auto; padding: 0 12px; }
+.app-header { border-radius: 8px 8px 0 0; }
+.app-header .eyebrow { color: #dfe8f3; font-size: 11px; letter-spacing: .1em; }
+.app-header .header-copy { color: #dfe8f3; font-size: 12px; }
+.workflow-card { padding: 12px; background: #fff; border: 1px solid var(--ui-border); border-radius: 0 0 8px 8px; }
+.workflow-card > :not(:first-child) { margin-top: 7px; }
+#directoryLocation { color: var(--ui-ink); }

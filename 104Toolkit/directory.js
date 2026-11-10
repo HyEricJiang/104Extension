@@ -28,7 +28,7 @@ authorizeButton.addEventListener("click", async () => {
   try {
     // 原控制代碼在載入時讀取；直接在點擊時請求授權，保留使用者操作啟動權。
     const permission = await savedHandle.requestPermission({ mode: "readwrite" });
-    if (permission !== "granted") throw new Error("未取得資料夾授權，尚未開始複製或匯出。可再次授權或另選資料夾。");
+    if (permission !== "granted") throw new Error("未取得資料夾授權，尚未開始登錄或匯出。可再次授權或另選資料夾。");
     await startPendingExport();
   } catch (error) { statusText.textContent = error.message; }
   finally { authorizeButton.disabled = false; }

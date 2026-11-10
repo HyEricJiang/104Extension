@@ -22,7 +22,7 @@ function popup(state, save = async () => ({ok: true})) {
       runtime: {getManifest: () => ({version: VERSION}), onMessage: {addListener() {}}},
       storage: {local: {get: async () => ({})}}
     },
-    ResumeTrainingLabels: {trainingFilename: () => 'AI訓練資料_Test.pdf'}
+    ResumeTrainingLabels: require('../training-labels.js')
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'popup.js'), 'utf8'), context);
   context.sendClassification = async message => {

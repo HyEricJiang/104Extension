@@ -3,8 +3,8 @@
 // 功能摘要：
 // 1. 支援目前分頁單份匯出
 // 2. 支援從目前分頁往右批次匯出
-// 3. 支援檔名前綴模式：手動 / 分頁群組 / 不使用前綴
-// 4. 支援自訂檔名後綴
+// 3. 一般版依分頁群組命名，固定加上 104邀約
+// 4. 不合適群組只匯出 AI 訓練版
 // 5. 支援批次安全終止
 // 6. 支援較完整的狀態同步
 
@@ -16,10 +16,7 @@ const NAME_SELECTOR =
 const DEFAULT_SETTINGS = {
   subdir: "104履歷下載區/",
   firstWait: 4000,
-  nextWait: 800,
-  filenamePrefixMode: "manual",
-  filenamePrefix: "",
-  filenameSuffix: ""
+  nextWait: 800
 };
 
 const PDF_PRINT_OPTIONS = { printBackground: true, preferCSSPageSize: true };
@@ -283,7 +280,10 @@ async function runIdnoExportJob(items, jobTitle) {
     badgeRunning(state.currentIndex, state.total, `${jobTitle}：${state.currentIndex}/${state.total}`);
 
     try {
-      const label = await globalThis.ResumeTrainingLabels.read(info);
+      const labels = globalThis.ResumeTrainingLabels;
+      const group = info.sourceTabGroupTitle;
+      const trainingOnly = labels.isTrainingOnlyGroup(group);
+      const annotation = labels.exportAnnotation(group, await labels.read(info));
       const url = buildPreviewUrl(info);
 
       // 🌟 核心要求 1：安靜的背景分頁 (絕不跳出新視窗干擾)
@@ -393,31 +393,27 @@ async function runIdnoExportJob(items, jobTitle) {
       if (!name || name.trim() === "") {
         throw new Error("無法取得候選人姓名 (履歷畫面可能空白或發生異常)，已自動攔截並取消輸出 PDF。");
       }
-      const safeName = sanitizeFilename(name);
-
-      const prefix = await resolveFilenamePrefix(info);
-      const suffix = sanitizeFilename(String(state.settings.filenameSuffix || "").trim());
-      const filenameOnly = buildFilename(prefix, safeName, suffix);
-      const subdir = (state.settings.subdir || "").trim();
-      const filename = subdir ? normalizeSubdir(subdir) + filenameOnly : filenameOnly;
+      const subdir = normalizeSubdir((state.settings.subdir || "").trim());
+      const invitationFilename = trainingOnly ? "" : labels.invitationFilename(name, group);
+      const trainingFilename = labels.trainingFilename(name, annotation);
 
       // 執行列印 (因為 Debugger 已經掛載，直接發送列印指令)
       const { data } = await chrome.debugger.sendCommand(debuggee, "Page.printToPDF", PDF_PRINT_OPTIONS);
       if (!data) throw new Error("printToPDF 沒有回傳資料。");
 
       const pdfBytes = base64ToUint8Array(data);
-      await downloadPdfBytes(pdfBytes, filename, outputTarget);
-      regularSaved = true;
-      report.regularFiles++;
-      // 同一份 PDF 同時服務邀約與訓練，避免再次讀取履歷造成內容不一致。
-      if (label?.label) {
-        const trainingFilename = globalThis.ResumeTrainingLabels.trainingFilename(name, label);
-        const trainingPath = subdir ? normalizeSubdir(subdir) + trainingFilename : trainingFilename;
-        const trainingBytes = await globalThis.RecruitingTrainingPdf.prepend(pdfBytes, debuggee, name, label);
-        await downloadPdfBytes(trainingBytes, trainingPath, outputTarget);
+      if (invitationFilename) {
+        await downloadPdfBytes(pdfBytes, subdir + invitationFilename, outputTarget);
+        regularSaved = true;
+        report.regularFiles++;
+      }
+      if (trainingFilename) {
+        const trainingBytes = await globalThis.RecruitingTrainingPdf.prepend(pdfBytes, debuggee, name, annotation);
+        await downloadPdfBytes(trainingBytes, subdir + trainingFilename, outputTarget);
         report.trainingFiles++;
       }
-      state.lastMessage = `✅ ${state.currentIndex}/${state.total} 已完成：${filenameOnly}${label?.label ? "（含 AI 訓練版本）" : ""}`;
+      const exportedFiles = [invitationFilename, trainingFilename].filter(Boolean).join("、");
+      state.lastMessage = `完成 ${state.currentIndex}/${state.total} · ${exportedFiles}`;
       report.ok++;
     } catch (error) {
       const errMessage = (regularSaved ? "一般履歷已保留，AI 訓練資料儲存失敗：" : "") + (error?.message || String(error));
@@ -470,7 +466,7 @@ async function getActiveTabGroupInfo() {
     hasGroup: Boolean(title),
     title: title || "",
     groupId: activeTab.groupId ?? -1,
-    hint: title ? "已抓到群組名稱。" : "目前分頁沒有群組，會改用手動前綴。"
+    hint: title ? "已抓到群組名稱。" : "目前分頁沒有群組，檔名以姓名開頭。"
   };
 }
 
@@ -478,19 +474,8 @@ async function getTabGroupTitleByTab(tab) {
   try {
     if (!tab || typeof tab.groupId !== "number" || tab.groupId < 0) return "";
     const group = await chrome.tabGroups.get(tab.groupId);
-    return sanitizeFilename(String(group?.title || "").trim());
+    return String(group?.title || "").trim();
   } catch (_) { return ""; }
-}
-
-async function resolveFilenamePrefix(info) {
-  const mode = String(state.settings.filenamePrefixMode || "manual").trim();
-  const manualPrefix = sanitizeFilename(String(state.settings.filenamePrefix || "").trim());
-  const groupPrefix = sanitizeFilename(String(info?.sourceTabGroupTitle || "").trim());
-  // 有職缺群組時優先依群組命名；未分組才沿用前綴設定。
-  if (groupPrefix) return groupPrefix;
-  if (mode === "tabGroup") return manualPrefix;
-  if (mode === "none") return "";
-  return manualPrefix;
 }
 
 function is104ResumePage(url) {
@@ -600,19 +585,6 @@ async function getCandidateName(tabId) {
     args: [NAME_SELECTOR]
   });
   return results?.[0]?.result || "";
-}
-
-function sanitizeFilename(name) {
-  return String(name || "").replace(/[\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80);
-}
-
-function buildFilename(prefix, name, suffix) {
-  const parts = [];
-  if (prefix) parts.push(prefix);
-  if (name) parts.push(name);
-  if (suffix) parts.push(suffix);
-  const base = parts.filter(Boolean).join("_") || "resume";
-  return `${base}.pdf`;
 }
 
 function normalizeSubdir(subdir) {

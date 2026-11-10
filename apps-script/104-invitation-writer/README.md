@@ -1,0 +1,12 @@
+# 104 履歷登錄部署
+
+公開版用佔位值保留各公司自己的部署設定。部署前在本機把 `Code.gs`、`Index.html` 與 `104Toolkit/popup.js` 裡的 `REPLACE_WITH_SPREADSHEET_ID` 換成同一份招募紀錄表 ID，並確認工作表名稱及分頁 ID。其他公司請依 Workspace 網域調整 `Code.gs` 的帳號檢核與 `104Toolkit/invitation.js` 的部署網址及檢核規則。
+
+1. 以公司的 Google Workspace 帳號在 Apps Script 建立獨立專案「104 邀約紀錄登錄」。將 `Code.gs` 和 `Index.html` 放入專案。在「專案設定」開啟顯示資訊清單，套用 `appsscript.json`，確認左側「服務」已出現 Google Sheets API。
+2. 選「部署」→「新增部署」→「網頁應用程式」。「執行身分」選**存取網頁應用程式的使用者**，「誰可以存取」選**鴻揚科技網域內的使用者**。使用者須本來就有目標表的編輯權，並列在「設定」分頁 L 欄的邀約人清單。
+3. 在原 Chrome 擴充功能資料夾更新 `104Toolkit` 檔案，於 `chrome://extensions` 重新載入。在 `104Toolkit/invitation.js` 將 `WRITER_ID` 的佔位值換成部署 ID。
+4. 在已加入職缺群組的履歷按「只登錄本頁到邀約紀錄」，或者按主按鈕一起匯出本頁往右的 PDF。首次開啟登錄頁需登入公司帳號並授權。若授權後仍停在登錄頁，可重新載入以接續原批次。登錄頁會顯示成功筆數、列號、略過筆數和試算表連結。
+
+程式以 Google 實際授權帳號辨識邀約人，例如 `eric.jiang@hy-tech.com.tw` → `Eric.J`。寫入 B、C、D 和 F、G、H、I 欄，C 固定為「104邀約」。B 欄首筆的儲存格附註會保留批次識別碼，同一批次重試時用來識別已寫入的資料。再次點擊工作流會建立新批次。
+
+A 欄由既有的 `reconcileInviteUidSystem` 定時巡檢補號，因為 Sheets API 寫入不會觸發 `onEdit`。若 A 欄仍空白，請由管理員確認既有的五分鐘巡檢觸發器正在運作。即使前批資料正在等候補號，新批資料也會接在其後。

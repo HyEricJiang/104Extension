@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",selectedDirectory=false,failTraining=false,candidateName="Test",prefixMode="tabGroup"}={}) {
+function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",groupTitles,selectedDirectory=false,failTraining=false,candidateName="Test",prefixMode="tabGroup"}={}) {
  const stored={settings:{subdir:'104履歷下載區/',filenamePrefixMode:prefixMode,filenamePrefix:'Manual',filenameSuffix:'104',firstWait:0,nextWait:0}};
  const events=new Set();const downloads=[];let nextTab=100;let printCount=0;
  const noopEvent={addListener(){},removeListener(){}};
@@ -14,9 +14,9 @@ function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",
    action:new Proxy({},{get:()=>async()=>{}}),
    runtime:{onInstalled:noopEvent,onMessage:noopEvent},
    storage:{local:{get:async key=>({[key]:stored[key]}),set:async values=>Object.assign(stored,values),remove:async key=>{delete stored[key];}}},
-   tabs:{query:async()=>[1,2,3].map(id=>({id,active:id===1,index:id-1,groupId:40,url:`https://vip.104.com.tw/search/SearchResumeMaster?idno=TEST${id}`})),
+   tabs:{query:async()=>[1,2,3].map(id=>({id,active:id===1,index:id-1,groupId:groupTitles ? id : 40,url:`https://vip.104.com.tw/search/SearchResumeMaster?idno=TEST${id}`})),
     create:async()=>({id:++nextTab}),get:async()=>({status:'complete'}),remove:async()=>{},onUpdated:noopEvent,onRemoved:noopEvent},
-   tabGroups:{get:async()=>({title:groupTitle})},
+   tabGroups:{get:async id=>({title:groupTitles?.[id-1] ?? groupTitle})},
    scripting:{executeScript:async opts=>{
     if(opts.func.toString().includes('new Promise'))return[{result:{success:true}}];
     if(opts.args)return[{result:failSecond&&opts.target.tabId===102?'':candidateName}];
@@ -40,15 +40,16 @@ function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",
    }
   }});
  const fileWrites=[];
+ const annotations=[];
  context.RecruitingOutputDirectory={getTarget:async()=>selectedDirectory?{name:"訓練資料"}:null,writeFile:async(_target,filename,data)=>{
    if(failTraining&&filename.startsWith("AI訓練資料"))throw Error("測試寫入失敗");
    fileWrites.push({filename,data});return{filename,path:`訓練資料/${filename}`,directWrite:true};
  }};
- context.RecruitingTrainingPdf={prepend:async bytes=>new Uint8Array([...bytes,99])};
+ context.RecruitingTrainingPdf={prepend:async (bytes, _tab, _name, annotation)=>{annotations.push(annotation);return new Uint8Array([...bytes,99]);}};
  context.TextEncoder=TextEncoder;
  const root=path.join(__dirname,'..');
  for(const file of ['tab-scope.js','training-labels.js','pdf-exporter.js'])vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
- return {context,downloads,fileWrites,get printCount(){return printCount;}};
+ return {context,downloads,fileWrites,annotations,get printCount(){return printCount;}};
 }
 
 test('混合批次：有標籤產生一般與訓練兩版；未標記一版；失敗履歷不產生檔案或CSV',async()=>{
@@ -56,9 +57,9 @@ test('混合批次：有標籤產生一般與訓練兩版；未標記一版；�
  await h.context.ResumeTrainingLabels.save({idno:'TEST1'},'wronglyExcludedShouldRecommend');
  await h.context.RecruitingPdfExporter.runDownloadRightBatch();
  assert.deepEqual(h.downloads.map(d=>d.filename),[
-  '104履歷下載區/Jr.Java PG_Test_104.pdf',
+  '104履歷下載區/Jr.Java PG_Test_104邀約.pdf',
   '104履歷下載區/AI訓練資料_Test.pdf',
-  '104履歷下載區/Jr.Java PG_Test_104.pdf'
+  '104履歷下載區/Jr.Java PG_Test_104邀約.pdf'
  ]);
  assert.ok(h.downloads.every(d=>d.url.startsWith('data:application/pdf')));
  assert.notEqual(h.downloads[0].url,h.downloads[1].url);
@@ -76,12 +77,23 @@ test('停止後不處理下一位，已開始的有標籤履歷仍完成兩個�
  assert.ok(h.context.RecruitingPdfExporter.getState().lastMessage.includes('已停止'));
 });
 
-test('不合適群組未標記時只下載一般履歷；所有下載都為PDF',async()=>{
+test('不合適群組未標記時只匯出訓練版，使用群組名稱及已填原因',async()=>{
  const h=harness({groupTitle:'不合適'});
+ await h.context.ResumeTrainingLabels.saveReason({idno:'TEST1'},'缺乏實務經驗');
+ await h.context.RecruitingPdfExporter.runDownloadCurrent();
+ assert.deepEqual(h.downloads.map(d=>d.filename),['104履歷下載區/AI訓練資料_Test.pdf']);
+ assert.equal(h.annotations[0].label,'不合適');
+ assert.equal(h.annotations[0].reason,'缺乏實務經驗');
+ assert.equal((await h.context.ResumeTrainingLabels.read({idno:'TEST1'})).categoryId,null);
+});
+
+test('混合群組批次：不合適保留人工標籤，只產訓練版',async()=>{
+ const h=harness({selectedDirectory:true,groupTitles:['Jr.Java PG','不合適','Sr.Net PG']});
+ await h.context.ResumeTrainingLabels.save({idno:'TEST2'},'reviewedShouldExclude');
  await h.context.RecruitingPdfExporter.runDownloadRightBatch();
- assert.equal(h.downloads.length,3);
- assert.ok(h.downloads.every(d=>d.filename==='104履歷下載區/不合適_Test_104.pdf'));
- assert.ok(h.downloads.every(d=>d.url.startsWith('data:application/pdf')));
+ assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104邀約.pdf','AI訓練資料_Test.pdf','Sr.Net PG_Test_104邀約.pdf']);
+ assert.equal(h.annotations[0].label,'人工審核但應該排除');
+ assert.equal(h.printCount,3);
 });
 
 test('選擇資料夾後五種標籤皆以固定檔名存入，保留一般版並另產生標註版',async()=>{
@@ -90,7 +102,7 @@ test('選擇資料夾後五種標籤皆以固定檔名存入，保留一般版�
   await h.context.ResumeTrainingLabels.save({idno:'TEST1'},category);
   await h.context.RecruitingPdfExporter.runDownloadCurrent();
   assert.equal(h.downloads.length,0);
-  assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104.pdf',`AI訓練資料_Test.pdf`]);
+  assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104邀約.pdf',`AI訓練資料_Test.pdf`]);
   assert.notDeepEqual(h.fileWrites[0].data,h.fileWrites[1].data);
   assert.equal(h.printCount,1);
  }
@@ -101,7 +113,7 @@ test('移除標籤後只產生一般履歷，不再產生訓練版',async()=>{
  await h.context.ResumeTrainingLabels.save({idno:'TEST1'},'reviewedShouldExclude');
  await h.context.ResumeTrainingLabels.remove({idno:'TEST1'});
  await h.context.RecruitingPdfExporter.runDownloadCurrent();
- assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104.pdf']);
+ assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104邀約.pdf']);
 });
 
 test('訓練版儲存失敗會記為失敗，一般版保留且不重印',async()=>{
@@ -114,11 +126,11 @@ test('訓練版儲存失敗會記為失敗，一般版保留且不重印',async(
  assert.ok(h.context.RecruitingPdfExporter.getState().lastMessage.includes('一般履歷 1 份，AI 訓練資料 0 份'));
 });
 
-test('未加入群組時沿用手動前綴，訓練版不帶一般後綴',async()=>{
+test('未加入群組時忽略舊版手動前後綴，訓練版不帶一般後綴',async()=>{
  const h=harness({selectedDirectory:true,groupTitle:'',prefixMode:'manual'});
  await h.context.ResumeTrainingLabels.save({idno:'TEST1'},'systemRecommendedUnsuitable');
  await h.context.RecruitingPdfExporter.runDownloadCurrent();
- assert.deepEqual(h.fileWrites.map(f=>f.filename),['Manual_Test_104.pdf','AI訓練資料_Test.pdf']);
+ assert.deepEqual(h.fileWrites.map(f=>f.filename),['Test_104邀約.pdf','AI訓練資料_Test.pdf']);
 });
 
 test('原因移至標註頁，訓練檔名不帶標籤與原因；只有原因沒有標籤時只產生一般版',async()=>{
@@ -127,5 +139,5 @@ test('原因移至標註頁，訓練檔名不帶標籤與原因；只有原因�
  await h.context.ResumeTrainingLabels.saveReason({idno:'TEST1'},'缺乏Java實務經驗');
  await h.context.ResumeTrainingLabels.saveReason({idno:'TEST2'},'待確認');
  await h.context.RecruitingPdfExporter.runDownloadRightBatch();
- assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104.pdf','AI訓練資料_Test.pdf','Jr.Java PG_Test_104.pdf','Jr.Java PG_Test_104.pdf']);
+ assert.deepEqual(h.fileWrites.map(f=>f.filename),['Jr.Java PG_Test_104邀約.pdf','AI訓練資料_Test.pdf','Jr.Java PG_Test_104邀約.pdf','Jr.Java PG_Test_104邀約.pdf']);
 });

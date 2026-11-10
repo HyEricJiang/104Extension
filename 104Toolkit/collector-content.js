@@ -54,7 +54,7 @@
   }
 
   /**
-   * TSV 輸出需要把換行壓平，避免貼到 Google Sheet 時欄位錯位。
+   * 履歷欄位以 TSV 交接給套件，先移除欄位內的換行與定位字元。
    */
   function tsvEscape(v) {
     return String(v ?? '').replace(/\r?\n/g, ' ').trim();
@@ -475,19 +475,36 @@
     return Boolean(name && (email || isHiddenValue(email)) && (phone || isHiddenValue(phone)));
   }
 
+  function waitForContact() {
+    return new Promise(resolve => {
+      const observer = new MutationObserver(check);
+      const timer = setTimeout(() => finish(false), CFG.waitTimeoutMs);
+      function finish(ready) {
+        clearTimeout(timer);
+        observer.disconnect();
+        resolve(ready);
+      }
+      function check() {
+        try { if (modalReadyForRead()) finish(true); } catch (_) {}
+      }
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+      check();
+    });
+  }
+
   async function extractOne() {
     try {
       const resumeCode = getResumeCode();
-      const contactBtn = findContactButton();
-
-      if (!contactBtn) {
-        return { ok: false, error: "找不到聯繫方式按鈕" };
+      const alreadyOpen = Boolean(getVisibleContactModalRoot());
+      if (!alreadyOpen) {
+        const contactBtn = findContactButton();
+        if (!contactBtn) return { ok: false, error: "找不到聯繫方式按鈕" };
+        contactBtn.click();
       }
 
-      contactBtn.click();
-
-      const ready = await waitForFn(() => modalReadyForRead());
+      const ready = await waitForContact();
       if (!ready) {
+        if (!alreadyOpen) void closeModalRobust().catch(logError);
         return { ok: false, error: "聯繫方式資料未出現（可能未載入或頁面結構變更）" };
       }
 
@@ -495,10 +512,10 @@
       const email = readEmail() || '';
       const phone = readPhone() || '';
 
-      await closeModalRobust();
+      if (!alreadyOpen) void closeModalRobust().catch(logError);
 
       const line = toTSVLine([name, email, phone, resumeCode]);
-      logInfo("成功擷取一筆", { name, email, phone, resumeCode });
+      logInfo("成功擷取一筆");
       return { ok: true, line, resumeCode };
     } catch (error) {
       const reason = String(error?.message || error);
