@@ -96,22 +96,27 @@
       }
 
       const rows = invitation.getRows();
-      let registration = "本批沒有符合登錄條件的履歷。";
+      const failures = invitation.getFailures();
+      let registration = failures.length ? "本批未寫入邀約紀錄。" : "本批沒有符合登錄條件的履歷。";
       let registrationError = "";
-      if (rows.length) {
+      if (rows.length && !failures.length) {
         await persistAndNotify({ phase: "sending", lastMessage: `正在等待 Google 確認 ${rows.length} 筆資料…` });
+        if (state.stopRequested) {
+          await persistAndNotify({ running: false, stopRequested: false, phase: "stopped", lastMessage: "已停止登錄。" });
+          return;
+        }
         try {
           const result = await writer.send(rows, invitation.getSkipped(), targets[0].windowId);
           const lastRow = result.firstRow + result.count - 1;
           const range = result.count === 1 ? String(result.firstRow) : `${result.firstRow}–${lastRow}`;
-          const skipped = result.skipped ? ` 略過 ${result.skipped} 頁。` : "";
+          const skipped = result.skipped ? ` ${result.skipped} 頁無可登錄的職缺群組。` : "";
           registration = `已寫入邀約紀錄 ${result.count} 筆，第 ${range} 列。${skipped}`;
           await persistAndNotify({ current: 1, lastMessage: registration, firstRow: result.firstRow, savedCount: result.count });
         } catch (error) {
           registrationError = error.message;
           registration = "Google 登錄未確認成功。";
         }
-      } else if (!includePdf) {
+      } else if (!includePdf && !failures.length) {
         registrationError = "沒有取得完整的姓名及 104 履歷編號。";
       }
 
@@ -128,7 +133,8 @@
           pdfError = error.message;
         }
       }
-      const error = [registrationError, pdfError].filter(Boolean).join(" ");
+      const collectionError = failures.length ? `${failures.length} 頁讀取失敗，整批未送出。請確認 ${failures.join("、")} 後重試。` : "";
+      const error = [registrationError, collectionError, pdfError].filter(Boolean).join(" ");
       await persistAndNotify({
         running: false,
         stopRequested: false,

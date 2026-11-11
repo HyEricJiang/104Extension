@@ -1,5 +1,6 @@
 (() => {
   const CONCURRENCY = 4;
+  const RETRY_DELAYS_MS = [1000, 2500, 5000];
   let running = false;
   let stopRequested = false;
 
@@ -16,6 +17,25 @@
     return result;
   }
 
+  async function readContact(tabId) {
+    try {
+      return await collectFromTab(tabId);
+    } catch (_) {
+      return { ok: false, error: "無法讀取履歷分頁" };
+    }
+  }
+
+  async function collectWithRetry(tabId) {
+    let result = await readContact(tabId);
+    for (const delay of RETRY_DELAYS_MS) {
+      if (result?.ok || stopRequested) break;
+      await new Promise(resolve => setTimeout(resolve, delay));
+      if (stopRequested) break;
+      result = await readContact(tabId);
+    }
+    return result;
+  }
+
   async function startCollection(targets, onContact) {
     if (running) throw new Error("目前正在讀取履歷資料。");
     running = true;
@@ -23,10 +43,9 @@
     try {
       for (let i = 0; i < targets.length && !stopRequested; i += CONCURRENCY) {
         const chunk = targets.slice(i, i + CONCURRENCY);
-        const results = await Promise.allSettled(chunk.map(tab => collectFromTab(tab.id)));
+        const results = await Promise.all(chunk.map(tab => collectWithRetry(tab.id)));
         for (const [index, result] of results.entries()) {
-          const data = result.status === "fulfilled" ? result.value : null;
-          onContact(chunk[index], data?.ok ? data.line : undefined);
+          onContact(chunk[index], result?.ok ? result.line : undefined, result?.error);
         }
       }
     } finally {

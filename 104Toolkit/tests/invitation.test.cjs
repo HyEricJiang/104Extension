@@ -9,6 +9,42 @@ const bridge = readFileSync(join(__dirname, "../invitation-bridge.js"), "utf8");
 const backend = readFileSync(join(__dirname, "../../apps-script/104-invitation-writer/Code.gs"), "utf8");
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test("104 聯繫方式視窗有渲染時，即使 aria-hidden 為 true 仍可擷取資料", async () => {
+  const label = textContent => ({ textContent, querySelectorAll: () => [] });
+  const modal = {
+    getAttribute: key => key === "aria-hidden" ? "true" : null,
+    getBoundingClientRect: () => ({ width: 720, height: 480 }),
+    querySelector: selector => label(selector.includes("title") ? "聯繫方式" : "E-mail 聯絡電話")
+  };
+  const context = vm.createContext({
+    window: {},
+    console: { log() {}, error() {} },
+    setTimeout,
+    clearTimeout,
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    document: {
+      documentElement: {},
+      querySelectorAll(selector) {
+        if (selector === "span.copy-content") return [label("00012345")];
+        if (selector.includes("div.modal")) return [modal];
+        return [];
+      },
+      querySelector(selector) {
+        if (selector.includes("div:nth-child(3) > div.col-10")) return label("0912345678");
+        if (selector.includes("div:nth-child(2) > div.col-10")) return label("name@example.test");
+        if (selector.endsWith("div:nth-child(1) > div")) return label("測試人員");
+        return null;
+      }
+    }
+  });
+  const source = readFileSync(join(__dirname, "../collector-content.js"), "utf8");
+  vm.runInContext(source, context);
+  const result = await context.window.__bunnyExtractOne();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.line, "測試人員\tname@example.test\t0912345678\t00012345");
+});
+
 test("逐頁取得職缺群組，保留同一人不同職缺並排除未分類分頁", async () => {
   const context = vm.createContext({
     ResumeTrainingLabels: require("../training-labels.js"),
@@ -24,7 +60,40 @@ test("逐頁取得職缺群組，保留同一人不同職缺並排除未分類�
     draft.capture(tab, tab.id === 4 ? "" : "測試人員\tname@example.test\t0912345678\t0001");
   }
   assert.deepEqual(plain(draft.getRows()).map(row => row.group), ["Sr.Java PG", "SA"]);
-  assert.equal(draft.getSkipped(), 2);
+  assert.equal(draft.getSkipped(), 1);
+  assert.deepEqual(plain(draft.getFailures()), ["第 5 頁（履歷資料不完整）"]);
+});
+
+test("五頁批次遇兩頁暫時讀不到時，重試後仍按分頁順序交付五筆", async () => {
+  const attempts = new Map();
+  const scope = Array.from({ length: 5 }, (_, index) => ({
+    id: index + 1, groupId: index < 2 ? 1 : 2, windowId: 9
+  }));
+  const context = vm.createContext({
+    setTimeout: callback => queueMicrotask(callback),
+    chrome: {
+      runtime: { onInstalled: { addListener() {} }, onMessage: { addListener() {} } },
+      tabs: { onRemoved: { addListener() {} } },
+      tabGroups: { query: async () => [{ id: 1, title: "Sr.QA" }, { id: 2, title: "SA" }] },
+      scripting: {
+        async executeScript({ target: { tabId }, files }) {
+          if (files) return [];
+          attempts.set(tabId, (attempts.get(tabId) || 0) + 1);
+          if (tabId === 2 && attempts.get(tabId) === 1) throw new Error("分頁尚未可用");
+          if (tabId === 5 && attempts.get(tabId) < 4) return [{ result: { ok: false } }];
+          return [{ result: { ok: true, line: `測試 ${tabId}\tname@example.test\t0912345678\t000${tabId}` } }];
+        }
+      }
+    }
+  });
+  vm.runInContext(frontend, context);
+  vm.runInContext(readFileSync(join(__dirname, "../collector.js"), "utf8"), context);
+  const draft = await context.RecruitingInvitation.prepare(scope);
+  await context.RecruitingCollector.startCollection(draft.contactTargets, draft.capture);
+  assert.deepEqual(plain(draft.getRows()).map(row => row.resumeCode), ["0001", "0002", "0003", "0004", "0005"]);
+  assert.deepEqual(scope.map(tab => attempts.get(tab.id)), [1, 2, 1, 1, 4]);
+  assert.deepEqual(plain(draft.getFailures()), []);
+  assert.equal(draft.getSkipped(), 0);
 });
 
 test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => {
@@ -52,8 +121,8 @@ test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => 
   const writing = context.RecruitingInvitation.send([{}], 0, 9);
   await navigated;
   const sender = { url: "https://example-script.googleusercontent.com/userCodeAppPanel", frameId: 1, tab: { id: 5, url } };
-  const send = (from, type = "TOOLKIT_INVITE_PAYLOAD", batchId, firstRow) => new Promise(resolve => {
-    listener({ panel: "hytech-104-invite-writer", type, batchId, firstRow }, from, resolve);
+  const send = (from, type = "TOOLKIT_INVITE_PAYLOAD", batchId, firstRow, lastRow = firstRow) => new Promise(resolve => {
+    listener({ panel: "hytech-104-invite-writer", type, batchId, firstRow, lastRow }, from, resolve);
   });
   assert.equal(await send({ ...sender, tab: { ...sender.tab, url: url.replace(/s\/[^/]+\/exec$/, "s/Other/exec") } }), null);
   assert.equal(await send({ ...sender, frameId: 0 }), null);
@@ -70,6 +139,13 @@ test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => 
   assert.deepEqual(plain(await writing), { ok: true, firstRow: 42, count: 1, skipped: 0 });
   assert.equal(closed, 5);
   assert.equal(await send(sender), null);
+
+  const partial = context.RecruitingInvitation.send([{}, {}], 0, 9);
+  const rejected = assert.rejects(partial, /寫入筆數與本批不符/);
+  while (!Object.keys(cache).length) await Promise.resolve();
+  const nextBatch = await send(sender);
+  await send(sender, "TOOLKIT_INVITE_ACK", nextBatch.batchId, 42);
+  await rejected;
 });
 
 test("外層 Google 框架等待內頁並在回讀成功列號後回報", async () => {
@@ -110,6 +186,7 @@ test("外層 Google 框架等待內頁並在回讀成功列號後回報", async 
   mutation();
   assert.equal(sent[1].type, "TOOLKIT_INVITE_ACK");
   assert.equal(sent[1].firstRow, "42");
+  assert.equal(sent[1].lastRow, "42");
   assert.equal(sent[1].batchId, payload.batchId);
 });
 

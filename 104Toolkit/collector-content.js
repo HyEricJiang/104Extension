@@ -11,7 +11,7 @@
    * 因為 104 頁面可能會改版或變慢，集中設定可以讓維護者快速調整，不必到處找魔法數字。
    */
   const CFG = {
-    waitTimeoutMs: 7000,
+    waitTimeoutMs: 10000,
     pollIntervalMs: 120,
     closeTimeoutMs: 2500,
     hiddenText: "求職者已隱藏",
@@ -105,7 +105,12 @@
   }
 
   function modalSignatureOk(modalRoot) {
-    if (!modalRoot || !isVisible(modalRoot)) return false;
+    // 104 keeps aria-hidden="true" even when this dialog is rendered.
+    // Use layout visibility without waiting for a background tab's fade animation.
+    const style = getComputedStyle(modalRoot);
+    const bounds = modalRoot.getBoundingClientRect();
+    if (modalRoot.hidden || style.display === 'none' || style.visibility === 'hidden' ||
+        bounds.width <= 10 || bounds.height <= 10) return false;
 
     const hasClose = !!modalRoot.querySelector('button.close,button[aria-label="Close"],i.vip-icon-close');
     const titleText = textOf(
@@ -179,8 +184,7 @@
   }
 
   function modalIsGone() {
-    const root = getVisibleContactModalRoot();
-    if (root && isVisible(root)) return false;
+    if (getVisibleContactModalRoot()) return false;
 
     const bd = document.querySelector('.modal-backdrop.show') || document.querySelector('.modal-backdrop');
     if (bd && isVisible(bd)) return false;
@@ -475,17 +479,22 @@
     return Boolean(name && (email || isHiddenValue(email)) && (phone || isHiddenValue(phone)));
   }
 
-  function waitForContact() {
-    return new Promise(resolve => {
+  function waitForDomValue(read) {
+    return new Promise((resolve, reject) => {
       const observer = new MutationObserver(check);
-      const timer = setTimeout(() => finish(false), CFG.waitTimeoutMs);
-      function finish(ready) {
-        clearTimeout(timer);
-        observer.disconnect();
-        resolve(ready);
-      }
-      function check() {
-        try { if (modalReadyForRead()) finish(true); } catch (_) {}
+      const timer = setTimeout(() => check(true), CFG.waitTimeoutMs);
+      function check(expired) {
+        try {
+          const value = read();
+          if (!value && expired !== true) return;
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve(value);
+        } catch (error) {
+          clearTimeout(timer);
+          observer.disconnect();
+          reject(error);
+        }
       }
       observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
       check();
@@ -494,17 +503,19 @@
 
   async function extractOne() {
     try {
-      const resumeCode = getResumeCode();
-      const alreadyOpen = Boolean(getVisibleContactModalRoot());
-      if (!alreadyOpen) {
-        const contactBtn = findContactButton();
-        if (!contactBtn) return { ok: false, error: "找不到聯繫方式按鈕" };
-        contactBtn.click();
-      }
+      const page = await waitForDomValue(() => {
+        const resumeCode = getResumeCode();
+        const alreadyOpen = Boolean(getVisibleContactModalRoot());
+        const contactBtn = alreadyOpen ? null : findContactButton();
+        return resumeCode && (alreadyOpen || contactBtn) && { resumeCode, alreadyOpen, contactBtn };
+      });
+      if (!page) return { ok: false, error: "履歷編號或聯繫方式按鈕未載入" };
+      const { resumeCode, alreadyOpen, contactBtn } = page;
+      contactBtn?.click();
 
-      const ready = await waitForContact();
+      const ready = await waitForDomValue(modalReadyForRead);
       if (!ready) {
-        if (!alreadyOpen) void closeModalRobust().catch(logError);
+        if (!alreadyOpen) await closeModalRobust().catch(logError);
         return { ok: false, error: "聯繫方式資料未出現（可能未載入或頁面結構變更）" };
       }
 

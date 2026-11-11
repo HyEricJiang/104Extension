@@ -9,11 +9,11 @@ const workflowSource = fs.readFileSync(
   "utf8"
 );
 
-function createHarness({ permissionError = false, pdfFailure = false, trainingOnly = false, rows = ["王小明\tmail@example.com\t0900000000\tR001"] } = {}) {
+function createHarness({ permissionError = false, pdfFailure = false, trainingOnly = false, failures = [], rows = ["王小明\tmail@example.com\t0900000000\tR001"] } = {}) {
   const storage = {};
   const listeners = [];
   const calls = [];
-  let collectedScope, exportedScope;
+  let collectedScope, exportedScope, submittedRows;
   const collectorState = { running: false, stopRequested: false, rows };
   const pdfState = { running: false, stopRequested: false, lastMessage: "完成：成功 1/1" };
 
@@ -27,9 +27,14 @@ function createHarness({ permissionError = false, pdfFailure = false, trainingOn
         contactTargets: trainingOnly ? [] : scope,
         capture() {},
         getRows: () => trainingOnly ? [] : rows,
-        getSkipped: () => 0
+        getSkipped: () => 0,
+        getFailures: () => failures
       }),
-      send: async (items) => { calls.push(["submit"]); return { firstRow: 10, count: items.length }; }
+      send: async (items) => {
+        submittedRows = items;
+        calls.push(["submit"]);
+        return { firstRow: 10, count: items.length };
+      }
     },
     RecruitingTabScope: {capture: async originId => {calls.push(["scope",originId]);return [{id:originId}];}},
     RecruitingOutputDirectory: { getTarget: async () => { calls.push(["permission"]); if (permissionError) throw Error("資料夾需要授權"); return null; } },
@@ -107,7 +112,7 @@ function createHarness({ permissionError = false, pdfFailure = false, trainingOn
     });
   }
 
-  return { calls, dispatch, storage, get scopes(){return [collectedScope,exportedScope];} };
+  return { calls, dispatch, storage, get submittedRows() { return submittedRows; }, get scopes(){return [collectedScope,exportedScope];} };
 }
 
 async function waitForWorkflowToSettle(harness) {
@@ -122,12 +127,16 @@ async function waitForWorkflowToSettle(harness) {
 }
 
 test("整合工作流先確認 Google 寫入列，再於背景匯出 PDF", async () => {
-  const harness = createHarness();
+  const rows = ["row1", "row2", "row3", "row4", "row5"];
+  const harness = createHarness({ rows });
   const response = await harness.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
   assert.equal(response.ok, true);
 
   const state = await waitForWorkflowToSettle(harness);
   assert.equal(state.phase, "done");
+  assert.equal(state.savedCount, 5);
+  assert.match(state.lastMessage, /第 10–14 列/);
+  assert.deepEqual(harness.submittedRows, rows);
   assert.deepEqual(
     harness.calls.filter(([name]) => ["collect", "activate", "export", "submit"].includes(name)),
     [
@@ -138,16 +147,30 @@ test("整合工作流先確認 Google 寫入列，再於背景匯出 PDF", async
   );
 });
 
-test("聯絡資料無法讀取時仍可匯出 PDF", async () => {
-  const harness = createHarness({ rows: [] });
+test("聯絡資料無法讀取時仍可匯出 PDF，並回報登錄未完成", async () => {
+  const harness = createHarness({ rows: [], failures: ["第 1 頁（聯繫方式未載入）"] });
   const response = await harness.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
   assert.equal(response.ok, true);
 
   const state = await waitForWorkflowToSettle(harness);
-  assert.equal(state.phase, "done");
-  assert.match(state.lastMessage, /沒有符合登錄條件/);
+  assert.equal(state.phase, "error");
+  assert.match(state.lastMessage, /未寫入邀約紀錄/);
+  assert.match(state.error, /第 1 頁/);
   assert.equal(harness.calls.some(([name]) => name === "submit"), false);
   assert.equal(harness.calls.some(([name]) => name === "export"), true);
+});
+
+test("五頁只讀到三頁時，整批不寫入，仍可匯出 PDF", async () => {
+  const harness = createHarness({ rows: ["row1", "row2", "row3"], failures: ["第 2 頁", "第 5 頁"] });
+  await harness.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
+  const state = await waitForWorkflowToSettle(harness);
+  assert.equal(state.phase, "error");
+  assert.equal(state.savedCount, 0);
+  assert.equal(state.firstRow, 0);
+  assert.match(state.lastMessage, /本批未寫入/);
+  assert.match(state.error, /2 頁讀取失敗.*第 2 頁、第 5 頁/);
+  assert.ok(!harness.calls.some(([name]) => name === "submit"));
+  assert.ok(harness.calls.some(([name]) => name === "export"));
 });
 
 

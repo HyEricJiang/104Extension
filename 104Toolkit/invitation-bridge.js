@@ -36,10 +36,13 @@
       if (!status || !sheet) return;
       const observer = new MutationObserver(() => {
         const message = status.textContent.trim();
-        const firstRow = sheet.href.match(/[&#]range=A(\d+):I\d+$/)?.[1];
+        const range = sheet.href.match(/[&#]range=A(\d+):I(\d+)$/);
         let result;
         if (message.startsWith("登錄失敗：")) result = { type: "TOOLKIT_INVITE_FAILED", error: message };
-        else if (message.startsWith("已由") && firstRow) result = { type: "TOOLKIT_INVITE_ACK", firstRow };
+        else if (message.startsWith("已由") && range) {
+          const [, firstRow, lastRow] = range;
+          result = { type: "TOOLKIT_INVITE_ACK", firstRow, lastRow };
+        }
         if (!result) return;
         observer.disconnect();
         chrome.runtime.sendMessage({ ...result, panel, batchId: payload.batchId }).catch(() => {});

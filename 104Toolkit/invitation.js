@@ -28,23 +28,37 @@
     if (requireMatch && !eligible.size) throw new Error("範圍內沒有可登錄的履歷。請先將履歷分頁加入職缺群組。");
 
     const contactTargets = scope.filter(tab => eligible.has(tab.id));
-    const rows = new Map();
-    let missing = 0;
+    const pageNumbers = new Map(scope.map((tab, index) => [tab.id, index + 1]));
+    const rowsByTab = new Map();
+    const errorsByTab = new Map();
     return {
       contactTargets,
-      capture(tab, line) {
+      capture(tab, line, error) {
         const group = eligible.get(tab.id);
         if (!group) return;
         const [name, email, phone, resumeCode] = String(line || "").split("\t");
-        if (!name || !resumeCode) {
-          missing++;
+        if (![name, email, phone, resumeCode].every(value => value?.trim())) {
+          rowsByTab.delete(tab.id);
+          errorsByTab.set(tab.id, error || "履歷資料不完整");
           return;
         }
-        const key = `${group}:${resumeCode}`;
-        if (!rows.has(key)) rows.set(key, { group, name, email, phone, resumeCode });
+        rowsByTab.set(tab.id, { group, name, email, phone, resumeCode });
       },
-      getRows() { return [...rows.values()]; },
-      getSkipped() { return scope.length - eligible.size + missing; }
+      getRows() {
+        const unique = new Map();
+        for (const tab of contactTargets) {
+          const row = rowsByTab.get(tab.id);
+          if (!row) continue;
+          const key = `${row.group}:${row.resumeCode}`;
+          if (!unique.has(key)) unique.set(key, row);
+        }
+        return [...unique.values()];
+      },
+      getSkipped() { return scope.length - eligible.size; },
+      getFailures() {
+        return contactTargets.filter(tab => !rowsByTab.has(tab.id))
+          .map(tab => `第 ${pageNumbers.get(tab.id)} 頁（${errorsByTab.get(tab.id) || "尚未取得履歷資料"}）`);
+      }
     };
   }
 
@@ -98,8 +112,13 @@
         pending.get(sender.tab.id)?.({ ok: false, error: String(message.error || "Google 登錄失敗。") });
       } else {
         const firstRow = Number(message.firstRow);
-        const count = batch.payload.rows.length;
-        if (!Number.isSafeInteger(firstRow) || firstRow < 2) return null;
+        const lastRow = Number(message.lastRow);
+        if (!Number.isSafeInteger(firstRow) || firstRow < 2 || !Number.isSafeInteger(lastRow)) return null;
+        const count = lastRow - firstRow + 1;
+        if (count !== batch.payload.rows.length) {
+          pending.get(sender.tab.id)?.({ ok: false, error: "Google 回報的寫入筆數與本批不符，請先核對邀約紀錄後再重試。" });
+          return null;
+        }
         pending.get(sender.tab.id)?.({ ok: true, firstRow, count, skipped: batch.payload.skipped });
       }
       return null;
