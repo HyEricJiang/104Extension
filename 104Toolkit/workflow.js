@@ -79,7 +79,8 @@
       lastMessage: "正在讀取符合職缺群組的履歷資料…",
       error: "",
       firstRow: 0,
-      savedCount: 0
+      savedCount: 0,
+      sheetUrl: ""
     });
 
     try {
@@ -111,7 +112,7 @@
           const range = result.count === 1 ? String(result.firstRow) : `${result.firstRow}–${lastRow}`;
           const skipped = result.skipped ? ` ${result.skipped} 頁無可登錄的職缺群組。` : "";
           registration = `已寫入邀約紀錄 ${result.count} 筆，第 ${range} 列。${skipped}`;
-          await persistAndNotify({ current: 1, lastMessage: registration, firstRow: result.firstRow, savedCount: result.count });
+          await persistAndNotify({ current: 1, lastMessage: registration, firstRow: result.firstRow, savedCount: result.count, sheetUrl: result.sheetUrl || "" });
         } catch (error) {
           registrationError = error.message;
           registration = "Google 登錄未確認成功。";

@@ -4,8 +4,8 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",groupTitles,selectedDirectory=false,failTraining=false,candidateName="Test",prefixMode="tabGroup"}={}) {
- const stored={settings:{subdir:'104履歷下載區/',filenamePrefixMode:prefixMode,filenamePrefix:'Manual',filenameSuffix:'104',firstWait:0,nextWait:0}};
+function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",groupTitles,selectedDirectory=false,failTraining=false,candidateName="Test",prefixMode="tabGroup",invitationSuffix}={}) {
+ const stored={settings:{subdir:'104履歷下載區/',filenamePrefixMode:prefixMode,filenamePrefix:'Manual',filenameSuffix:'104',firstWait:0,nextWait:0,invitationSuffix}};
  const events=new Set();const downloads=[];let nextTab=100;let printCount=0;
  const noopEvent={addListener(){},removeListener(){}};
  const context=vm.createContext({console,URL,Uint8Array,atob,btoa,
@@ -65,6 +65,16 @@ test('混合批次：有標籤產生一般與訓練兩版；未標記一版；�
  assert.notEqual(h.downloads[0].url,h.downloads[1].url);
  assert.equal(h.printCount,2);
  assert.ok(h.context.RecruitingPdfExporter.getState().lastMessage.includes('一般履歷 2 份，AI 訓練資料 1 份'));
+});
+
+test('主動投遞後綴只套用一般 PDF',async()=>{
+ const h=harness({invitationSuffix:'104主動投遞'});
+ await h.context.ResumeTrainingLabels.save({idno:'TEST1'},'reviewedShouldRecommend');
+ await h.context.RecruitingPdfExporter.runDownloadCurrent();
+ assert.deepEqual(h.downloads.map(d=>d.filename),[
+  '104履歷下載區/Jr.Java PG_Test_104主動投遞.pdf',
+  '104履歷下載區/AI訓練資料_Test.pdf'
+ ]);
 });
 
 test('停止後不處理下一位，已開始的有標籤履歷仍完成兩個版本',async()=>{

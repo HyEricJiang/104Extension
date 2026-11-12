@@ -15,7 +15,7 @@
 - **確認成功**：工作台顯示「工作台 v1.11.1／背景 1.11.1」。若顯示舊背景提示，確認載入路徑及完整覆寫，再重新載入；必要時重新啟動 Chrome。停用重複安裝的舊工作台與獨立分類器。
 - 詳細更新、驗收與故障排除請見 [`104Toolkit/README.md`](./104Toolkit/README.md)。Tampermonkey 的履歷掃描、薪資試算與二次邀約仍使用各自腳本，見[腳本說明](./腳本整合區/README.md)。
 
-首次使用邀約登錄前，請依[公司部署說明](./apps-script/104-invitation-writer/README.md)設定 Google Apps Script 與招募紀錄表。
+鴻揚科技同仁可直接使用預設的公司登錄服務，首次使用時在套件「設定」按「開啟登錄服務／Google 授權」。另建服務請參閱[公司部署說明](./apps-script/104-invitation-writer/README.md)。
 
 ## 綜合功能
 

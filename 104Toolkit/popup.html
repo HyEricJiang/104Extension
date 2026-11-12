@@ -104,6 +104,12 @@
               <div><h3>存放資料夾</h3><p id="outputLocation" class="helper-text" aria-live="polite">讀取中…</p></div>
               <button id="chooseOutputDirectory" type="button" class="button button-secondary">變更資料夾</button>
             </div>
+            <label class="field">一般 PDF 檔名後綴
+              <select id="invitationSuffix">
+                <option value="104邀約">104邀約</option>
+                <option value="104主動投遞">104主動投遞</option>
+              </select>
+            </label>
             <details class="other-actions">
               <summary>進階設定</summary>
               <div class="other-body">
@@ -111,10 +117,16 @@
                   <label class="field">首份等待（ms）<input id="firstWait" type="number" min="0"></label>
                   <label class="field">後續等待（ms）<input id="nextWait" type="number" min="0"></label>
                 </div>
-                <p id="settingsStatus" class="helper-text" role="status">變更會自動儲存</p>
               </div>
             </details>
+            <p id="settingsStatus" class="helper-text" role="status">變更會自動儲存</p>
             <p id="toolkitVersion" class="helper-text version">正在確認工作台版本…</p>
+          </section>
+          <section class="settings-card" aria-labelledby="writerSettingsTitle">
+            <h2 id="writerSettingsTitle">邀約登錄設定</h2>
+            <p class="helper-text">已連接公司登錄服務。首次使用時可在此開啟 Google 授權頁。</p>
+            <p id="writerStatus" class="helper-text" role="status"></p>
+            <button id="openWriter" type="button" class="button button-secondary">開啟登錄服務／Google 授權</button>
           </section>
         </section>
       </div>

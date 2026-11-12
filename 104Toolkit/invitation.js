@@ -1,9 +1,9 @@
 (() => {
-  const WRITER_ID = "REPLACE_WITH_DEPLOYMENT_ID";
+  const WRITER_ID = "AKfycby7igqgEuahOlH6-3UX78P1dnAcoS352P8UMVfd56PzErjQGq37CLKZcpWYlEjPyUId1Q";
   const WRITER_URL = `https://script.google.com/a/macros/hy-tech.com.tw/s/${WRITER_ID}/exec`;
   const BATCH_PREFIX = "inviteBatch:";
   const pending = new Map();
-  const WAIT_MS = 20000;
+  const WAIT_MS = 45000;
   const PANEL_ID = "hytech-104-invite-writer";
   const POSITIONS = Object.freeze([
     "Sr.Java PG", "Jr.Java PG", "Sr.Net PG", "Jr.Net PG", "SA", "PM", "Jr.QA", "Sr.QA"
@@ -15,6 +15,18 @@
       if (url.origin !== "https://script.google.com" || url.username || url.password) return "";
       return url.pathname.match(/^\/(?:a\/macros\/hy-tech\.com\.tw|macros(?:\/u\/\d+)?)\/s\/([\w-]+)\/exec$/)?.[1] || "";
     } catch {
+      return "";
+    }
+  }
+
+  function confirmedSheetUrl(value, firstRow, lastRow) {
+    try {
+      const url = new URL(value);
+      const gid = new URLSearchParams(url.hash.slice(1)).get("gid");
+      if (url.origin !== "https://docs.google.com" || url.username || url.password ||
+          !/^\/spreadsheets\/d\/[\w-]+\/edit$/.test(url.pathname) || !/^\d+$/.test(gid || "")) return "";
+      return `${url.origin}${url.pathname}#gid=${gid}&range=A${firstRow}:I${lastRow}`;
+    } catch (_) {
       return "";
     }
   }
@@ -65,7 +77,6 @@
   async function send(rows, skipped, windowId) {
     if (!rows.length) throw new Error("找不到可登錄的姓名及 104 履歷編號。");
     if (rows.length > 100) throw new Error("單次最多登錄 100 筆，請縮小履歷分頁範圍。");
-
     const tab = await chrome.tabs.create({ windowId, index: 0, url: "about:blank", active: false });
     const key = BATCH_PREFIX + tab.id;
     const batchId = crypto.randomUUID();
@@ -76,10 +87,13 @@
         payload: { batchId, rows, skipped }
       } });
       const receipt = new Promise(resolve => {
-        pending.set(tab.id, resolve);
+        const attempt = { resolve, delivered: false };
+        pending.set(tab.id, attempt);
         timer = setTimeout(() => resolve({
           ok: false,
-          error: "Google 未回報寫入結果。請先核對邀約紀錄，並確認公司 Google 帳號已登入及授權後再試。"
+          error: attempt.delivered
+            ? "資料已交給登錄頁，但未收到寫入結果。請先核對邀約紀錄，再決定是否重試。"
+            : "未連上登錄頁，資料尚未交付。請到「設定 → 開啟登錄服務／Google 授權」，確認 Google 帳號與頁面提示。"
         }), WAIT_MS);
       });
       await chrome.tabs.update(tab.id, { url: WRITER_URL, active: false });
@@ -105,35 +119,42 @@
 
     const key = BATCH_PREFIX + sender.tab.id;
     const batch = (await chrome.storage.session.get(key))[key];
-    if (!batch || batch.expires < Date.now()) return null;
+    const attempt = pending.get(sender.tab.id);
+    if (!batch || batch.expires < Date.now() || !attempt) return null;
     if (message.type !== "TOOLKIT_INVITE_PAYLOAD") {
       if (message.batchId !== batch.payload.batchId) return null;
       if (message.type === "TOOLKIT_INVITE_FAILED") {
-        pending.get(sender.tab.id)?.({ ok: false, error: String(message.error || "Google 登錄失敗。") });
+        attempt.resolve({ ok: false, error: String(message.error || "Google 登錄失敗。") });
       } else {
         const firstRow = Number(message.firstRow);
         const lastRow = Number(message.lastRow);
         if (!Number.isSafeInteger(firstRow) || firstRow < 2 || !Number.isSafeInteger(lastRow)) return null;
         const count = lastRow - firstRow + 1;
         if (count !== batch.payload.rows.length) {
-          pending.get(sender.tab.id)?.({ ok: false, error: "Google 回報的寫入筆數與本批不符，請先核對邀約紀錄後再重試。" });
+          attempt.resolve({ ok: false, error: "Google 回報的寫入筆數與本批不符，請先核對邀約紀錄後再重試。" });
           return null;
         }
-        pending.get(sender.tab.id)?.({ ok: true, firstRow, count, skipped: batch.payload.skipped });
+        attempt.resolve({ ok: true, firstRow, count, skipped: batch.payload.skipped, sheetUrl: confirmedSheetUrl(message.sheetUrl, firstRow, lastRow) });
       }
       return null;
     }
+    attempt.delivered = true;
     return batch.payload;
   }
 
   chrome.runtime.onMessage.addListener((message, sender, reply) => {
+    if (message?.type === "TOOLKIT_GET_WRITER_URL") {
+      if (sender.url !== chrome.runtime.getURL("popup.html")) return false;
+      reply({ ok: true, url: WRITER_URL });
+      return false;
+    }
     if (message?.panel !== PANEL_ID ||
         !["TOOLKIT_INVITE_PAYLOAD", "TOOLKIT_INVITE_ACK", "TOOLKIT_INVITE_FAILED"].includes(message.type)) return false;
     exchange(message, sender).then(reply, () => reply(null));
     return true;
   });
   chrome.tabs.onRemoved.addListener(tabId => {
-    pending.get(tabId)?.({ ok: false, error: "Google 登錄連線已關閉，請先確認邀約紀錄。"});
+    pending.get(tabId)?.resolve({ ok: false, error: "Google 登錄連線已關閉，請先確認邀約紀錄。"});
     chrome.storage.session.remove(BATCH_PREFIX + tabId).catch(() => {});
   });
 

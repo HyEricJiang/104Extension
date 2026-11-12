@@ -17,7 +17,7 @@
   }
 
   let working = false;
-  const deadline = Date.now() + 18000;
+  const deadline = Date.now() + 40000;
 
   async function deliver() {
     if (working) return;
@@ -41,13 +41,14 @@
         if (message.startsWith("登錄失敗：")) result = { type: "TOOLKIT_INVITE_FAILED", error: message };
         else if (message.startsWith("已由") && range) {
           const [, firstRow, lastRow] = range;
-          result = { type: "TOOLKIT_INVITE_ACK", firstRow, lastRow };
+          result = { type: "TOOLKIT_INVITE_ACK", firstRow, lastRow, sheetUrl: sheet.href };
         }
         if (!result) return;
         observer.disconnect();
         chrome.runtime.sendMessage({ ...result, panel, batchId: payload.batchId }).catch(() => {});
       });
       observer.observe(status, { childList: true, characterData: true, subtree: true });
+      observer.observe(sheet, { attributes: true, attributeFilter: ["href"] });
       // The deployed app expects a message from its own window. Relay from the
       // same-origin panel without relying on a separate injection in the child.
       writer.dispatchEvent(new writer.MessageEvent("message", {

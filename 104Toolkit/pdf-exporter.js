@@ -3,7 +3,7 @@
 // 功能摘要：
 // 1. 支援目前分頁單份匯出
 // 2. 支援從目前分頁往右批次匯出
-// 3. 一般版依分頁群組命名，固定加上 104邀約
+// 3. 一般版依分頁群組和選擇的後綴命名
 // 4. 不合適群組只匯出 AI 訓練版
 // 5. 支援批次安全終止
 // 6. 支援較完整的狀態同步
@@ -250,6 +250,7 @@ async function runDownloadRightBatch(scopeTargets) {
 
 async function runIdnoExportJob(items, jobTitle) {
   await syncSettingsFromStorage();
+  const invitationSuffix = state.settings.invitationSuffix;
 
   const outputTarget = await globalThis.RecruitingOutputDirectory.getTarget();
   state.exportSummary = null;
@@ -394,7 +395,7 @@ async function runIdnoExportJob(items, jobTitle) {
         throw new Error("無法取得候選人姓名 (履歷畫面可能空白或發生異常)，已自動攔截並取消輸出 PDF。");
       }
       const subdir = normalizeSubdir((state.settings.subdir || "").trim());
-      const invitationFilename = trainingOnly ? "" : labels.invitationFilename(name, group);
+      const invitationFilename = trainingOnly ? "" : labels.invitationFilename(name, group, invitationSuffix);
       const trainingFilename = labels.trainingFilename(name, annotation);
 
       // 執行列印 (因為 Debugger 已經掛載，直接發送列印指令)

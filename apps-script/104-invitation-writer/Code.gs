@@ -14,14 +14,14 @@ const INVITE_POSITIONS = Object.freeze({
 });
 
 function doGet() {
-  getRecruiter_();
   return HtmlService.createHtmlOutputFromFile("Index").setTitle("104 履歷登錄｜邀約紀錄");
 }
 
 function getRecruiter_() {
   const email = String(Session.getActiveUser().getEmail()).trim().toLowerCase();
-  const match = email.match(/^([a-z]+)\.([a-z])[a-z]*@hy-tech\.com\.tw$/);
-  if (!match) throw new Error("請使用 first.last@hy-tech.com.tw 格式的公司 Google 帳號登入。");
+  if (!email) throw new Error("Google 未提供目前帳號的電子郵件，無法帶入邀約人。請在登錄頁確認選用的 Google 帳號及授權。");
+  const match = email.match(/^([a-z]+)\.([a-z])[a-z]*@[^@\s]+$/);
+  if (!match) throw new Error("目前 Google 帳號的電子郵件無法轉為邀約人名稱。");
   return match[1][0].toUpperCase() + match[1].slice(1) + "." + match[2].toUpperCase();
 }
 
@@ -50,7 +50,7 @@ function submitInvitations(payload) {
     const settings = book.getSheetByName("設定");
     const recruiterAllowed = settings && settings.getRange("L2:L" + settings.getLastRow())
       .getDisplayValues().some(([name]) => name === recruiter);
-    if (!recruiterAllowed) throw new Error("公司 Google 帳號對應的邀約人尚未加入「設定」的邀約人清單。");
+    if (!recruiterAllowed) throw new Error("目前 Google 帳號對應的邀約人「" + recruiter + "」尚未加入「設定」分頁 L 欄。");
 
     const firstRow = findInviteStart_(sheet, last);
     const endRow = firstRow + rows.length - 1;

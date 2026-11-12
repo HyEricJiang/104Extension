@@ -214,11 +214,9 @@ function renderWorkflow(state = {}) {
     ? `${state.lastMessage || "工作流失敗"} ${state.error}`
     : (state.lastMessage || "從目前分頁開始，向右處理連續的 104 履歷分頁。");
   const link = byId("inviteSheetLink");
-  link.hidden = !state.firstRow || !state.savedCount;
-  if (!link.hidden) {
-    const last = state.firstRow + state.savedCount - 1;
-    link.href = `https://docs.google.com/spreadsheets/d/REPLACE_WITH_SPREADSHEET_ID/edit#gid=61635491&range=A${state.firstRow}:I${last}`;
-  }
+  link.hidden = !state.sheetUrl;
+  if (state.sheetUrl) link.href = state.sheetUrl;
+  else link.removeAttribute("href");
   byId("inviteRight").disabled = running || jobsRunning || classificationBusy;
   ui.startWorkflow.disabled = running || jobsRunning || classificationBusy;
   byId("inviteCurrent").disabled = running || jobsRunning || classificationBusy || !canInviteCurrent;
@@ -265,7 +263,7 @@ function buildPreviewFilename() {
   const annotation = labels.exportAnnotation(currentGroupTitle, { label: currentTrainingLabel });
   const trainingFilename = labels.trainingFilename("王小明", annotation);
   byId("filenamePreview").hidden = trainingOnly;
-  byId("filenamePreview").textContent = trainingOnly ? "" : labels.invitationFilename("王小明", currentGroupTitle);
+  byId("filenamePreview").textContent = trainingOnly ? "" : labels.invitationFilename("王小明", currentGroupTitle, byId("invitationSuffix").value);
   byId("trainingFilenamePreview").hidden = !trainingFilename;
   byId("trainingFilenamePreview").textContent = trainingFilename || "";
   byId("groupHint").textContent = trainingOnly
@@ -280,6 +278,7 @@ async function loadSettings() {
   byId("outputLocation").textContent = output.selected ? output.name : (legacySubdir ? `瀏覽器下載位置／${legacySubdir}` : output.name);
   byId("firstWait").value = settings.firstWait ?? 4000;
   byId("nextWait").value = settings.nextWait ?? 800;
+  byId("invitationSuffix").value = ResumeTrainingLabels.normalizeInvitationSuffix(settings.invitationSuffix);
 }
 
 async function saveSettings() {
@@ -288,7 +287,8 @@ async function saveSettings() {
   const settings = {
     subdir: legacySubdir,
     firstWait: Math.max(0, Number(byId("firstWait").value || 0)),
-    nextWait: Math.max(0, Number(byId("nextWait").value || 0))
+    nextWait: Math.max(0, Number(byId("nextWait").value || 0)),
+    invitationSuffix: ResumeTrainingLabels.normalizeInvitationSuffix(byId("invitationSuffix").value)
   };
   await chrome.storage.local.set({ settings });
   await send({ cmd: "applySettings" });
@@ -302,6 +302,17 @@ function markSettingsDirty() {
     ui.settingsStatus.textContent = `儲存失敗：${errorText(error)}，請重新調整後重試。`;
     ui.settingsStatus.classList.remove("status-success");
   });
+}
+
+async function openWriter() {
+  const status = byId("writerStatus");
+  try {
+    const result = await send({ type: "TOOLKIT_GET_WRITER_URL" });
+    if (!result?.url) throw new Error("無法取得公司登錄網址。");
+    await chrome.tabs.create({ url: result.url });
+  } catch (error) {
+    status.textContent = errorText(error);
+  }
 }
 function reasonServiceUpdateMessage() {
   return "背景服務版本不相容，暫停原因編輯。請完整更新原安裝資料夾的 104Toolkit 檔案，在 chrome://extensions 重新載入「104 招募工作台」，再關閉並重開工作台；仍有問題時請重新啟動 Chrome。請勿移除擴充功能，以免遺失既有標籤。";
@@ -406,6 +417,11 @@ function bindActions() {
   ui.stopPdf.addEventListener("click", () => send({ cmd: "stopBatch" }));
   byId("trainingReason").addEventListener("input", event => { if (!event.isComposing) saveCurrentReason(); });
   byId("trainingReason").addEventListener("compositionend", saveCurrentReason);
+  byId("invitationSuffix").addEventListener("change", () => {
+    buildPreviewFilename();
+    markSettingsDirty();
+  });
+  byId("openWriter").addEventListener("click", openWriter);
 
   ["firstWait", "nextWait"].forEach((id) => {
     byId(id).addEventListener("input", markSettingsDirty);

@@ -101,14 +101,14 @@ test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => 
   let listener, url, closed, opened;
   const navigated = new Promise(resolve => { opened = resolve; });
   const context = vm.createContext({
-    URL, crypto, setTimeout, clearTimeout,
+    URL, URLSearchParams, crypto, setTimeout, clearTimeout,
     chrome: {
       storage: { session: {
         set: async entries => Object.assign(cache, entries),
         get: async key => ({ [key]: cache[key] }),
         remove: async key => { delete cache[key]; }
       } },
-      runtime: { onMessage: { addListener: fn => { listener = fn; } } },
+      runtime: { getURL: path => `chrome-extension://toolkit/${path}`, onMessage: { addListener: fn => { listener = fn; } } },
       tabs: {
         create: async options => { assert.equal(options.active, false); return { id: 5 }; },
         update: async (_, patch) => { assert.equal(patch.active, false); url = patch.url; opened(); },
@@ -120,9 +120,15 @@ test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => 
   vm.runInContext(frontend, context);
   const writing = context.RecruitingInvitation.send([{}], 0, 9);
   await navigated;
+  assert.match(url, /^https:\/\/script\.google\.com\/a\/macros\/hy-tech\.com\.tw\/s\/AK[\w-]+\/exec$/);
+  const auth = await new Promise(resolve => {
+    listener({ type: "TOOLKIT_GET_WRITER_URL" }, { url: "chrome-extension://toolkit/popup.html" }, resolve);
+  });
+  assert.deepEqual(plain(auth), { ok: true, url });
   const sender = { url: "https://example-script.googleusercontent.com/userCodeAppPanel", frameId: 1, tab: { id: 5, url } };
   const send = (from, type = "TOOLKIT_INVITE_PAYLOAD", batchId, firstRow, lastRow = firstRow) => new Promise(resolve => {
-    listener({ panel: "hytech-104-invite-writer", type, batchId, firstRow, lastRow }, from, resolve);
+    const sheetUrl = "https://docs.google.com/spreadsheets/d/test/edit#gid=61635491&range=A42:I42";
+    listener({ panel: "hytech-104-invite-writer", type, batchId, firstRow, lastRow, sheetUrl }, from, resolve);
   });
   assert.equal(await send({ ...sender, tab: { ...sender.tab, url: url.replace(/s\/[^/]+\/exec$/, "s/Other/exec") } }), null);
   assert.equal(await send({ ...sender, frameId: 0 }), null);
@@ -136,7 +142,7 @@ test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => 
   await send(sender, "TOOLKIT_INVITE_ACK", "wrong-batch", 42);
   assert.equal(closed, undefined);
   await send(sender, "TOOLKIT_INVITE_ACK", batch.batchId, 42);
-  assert.deepEqual(plain(await writing), { ok: true, firstRow: 42, count: 1, skipped: 0 });
+  assert.deepEqual(plain(await writing), { ok: true, firstRow: 42, count: 1, skipped: 0, sheetUrl: "https://docs.google.com/spreadsheets/d/test/edit#gid=61635491&range=A42:I42" });
   assert.equal(closed, 5);
   assert.equal(await send(sender), null);
 
@@ -240,6 +246,9 @@ test("資料接在尚未補號的列之後，原子更新指定欄位並允許�
   assert.match(note.rows[0].values[0].note, /^保留的附註\n104Toolkit /);
   assert.deepEqual(plain(context.submitInvitations(payload)), result);
   assert.equal(requests.length, 1);
-  context.Session.getActiveUser = () => ({ getEmail: () => "eric.jiang@gmail.com" });
-  assert.throws(() => context.submitInvitations(payload), /公司 Google 帳號/);
+  context.Session.getActiveUser = () => ({ getEmail: () => "Tammie.Lin@hy-tech.com.tw" });
+  assert.equal(context.getRecruiter_(), "Tammie.L");
+  assert.throws(() => context.submitInvitations(payload), /邀約人「Tammie\.L」尚未加入/);
+  context.Session.getActiveUser = () => ({ getEmail: () => "" });
+  assert.throws(() => context.submitInvitations(payload), /未提供目前帳號的電子郵件/);
 });

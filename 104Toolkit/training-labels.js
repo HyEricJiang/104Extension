@@ -65,8 +65,11 @@
   function isTrainingOnlyGroup(group) {
     return String(group || "").trim() === TRAINING_ONLY_GROUP;
   }
-  function invitationFilename(name, group) {
-    return [filenamePart(group).slice(0, 80), filenamePart(name).slice(0, 80), "104邀約"].filter(Boolean).join("_") + ".pdf";
+  function normalizeInvitationSuffix(value) {
+    return value === "104主動投遞" ? value : "104邀約";
+  }
+  function invitationFilename(name, group, suffix) {
+    return [filenamePart(group).slice(0, 80), filenamePart(name).slice(0, 80), normalizeInvitationSuffix(suffix)].filter(Boolean).join("_") + ".pdf";
   }
   function exportAnnotation(group, record) {
     if (record?.label) return record;
@@ -101,7 +104,7 @@ function parseResumeInfoFromUrl(url) {
     return null;
   } catch (_) { return null; }
 }
-  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, saveReason, isTrainingOnlyGroup, invitationFilename, exportAnnotation, trainingFilename, MAX_REASON_LENGTH, remove });
+  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, saveReason, isTrainingOnlyGroup, normalizeInvitationSuffix, invitationFilename, exportAnnotation, trainingFilename, MAX_REASON_LENGTH, remove });
   globalThis.ResumeTrainingLabels = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();
