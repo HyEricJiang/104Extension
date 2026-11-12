@@ -66,10 +66,18 @@
     return String(group || "").trim() === TRAINING_ONLY_GROUP;
   }
   function normalizeInvitationSuffix(value) {
-    return value === "104主動投遞" ? value : "104邀約";
+    return value === "104主動投遞" || value === "other" ? value : "104邀約";
   }
-  function invitationFilename(name, group, suffix) {
-    return [filenamePart(group).slice(0, 80), filenamePart(name).slice(0, 80), normalizeInvitationSuffix(suffix)].filter(Boolean).join("_") + ".pdf";
+  function customSuffix(value) {
+    return fitUtf8(filenamePart(value).replace(/^[. ]+|[. ]+$/g, ""), 120);
+  }
+  function invitationFilename(name, group, mode, custom) {
+    const selected = normalizeInvitationSuffix(mode);
+    const suffix = selected === "other" ? customSuffix(custom) || "104邀約" : selected;
+    const prefix = [filenamePart(group).slice(0, 80), filenamePart(name).slice(0, 80)].filter(Boolean).join("_");
+    // Leave room for the suffix, extension, and the duplicate-file number.
+    const prefixBudget = 240 - Array.from(suffix).reduce((total, char) => total + utf8Size(char), 0) - 5;
+    return [fitUtf8(prefix, prefixBudget), suffix].filter(Boolean).join("_") + ".pdf";
   }
   function exportAnnotation(group, record) {
     if (record?.label) return record;
@@ -104,7 +112,7 @@ function parseResumeInfoFromUrl(url) {
     return null;
   } catch (_) { return null; }
 }
-  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, saveReason, isTrainingOnlyGroup, normalizeInvitationSuffix, invitationFilename, exportAnnotation, trainingFilename, MAX_REASON_LENGTH, remove });
+  const api = Object.freeze({ CATEGORIES, identity, parseResumeInfoFromUrl, read, save, saveReason, isTrainingOnlyGroup, normalizeInvitationSuffix, customSuffix, invitationFilename, exportAnnotation, trainingFilename, MAX_REASON_LENGTH, remove });
   globalThis.ResumeTrainingLabels = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

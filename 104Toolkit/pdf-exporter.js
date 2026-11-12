@@ -250,7 +250,7 @@ async function runDownloadRightBatch(scopeTargets) {
 
 async function runIdnoExportJob(items, jobTitle) {
   await syncSettingsFromStorage();
-  const invitationSuffix = state.settings.invitationSuffix;
+  const { invitationSuffix, customInvitationSuffix } = state.settings;
 
   const outputTarget = await globalThis.RecruitingOutputDirectory.getTarget();
   state.exportSummary = null;
@@ -395,7 +395,7 @@ async function runIdnoExportJob(items, jobTitle) {
         throw new Error("無法取得候選人姓名 (履歷畫面可能空白或發生異常)，已自動攔截並取消輸出 PDF。");
       }
       const subdir = normalizeSubdir((state.settings.subdir || "").trim());
-      const invitationFilename = trainingOnly ? "" : labels.invitationFilename(name, group, invitationSuffix);
+      const invitationFilename = trainingOnly ? "" : labels.invitationFilename(name, group, invitationSuffix, customInvitationSuffix);
       const trainingFilename = labels.trainingFilename(name, annotation);
 
       // 執行列印 (因為 Debugger 已經掛載，直接發送列印指令)

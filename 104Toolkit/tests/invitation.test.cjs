@@ -219,9 +219,8 @@ test("資料接在尚未補號的列之後，原子更新指定欄位並允許�
       getNote: () => notes.get(row) || ""
     })
   };
-  const settings = { getLastRow: () => 2, getRange: () => ({ getDisplayValues: () => [["Eric.J"]] }) };
   const context = vm.createContext({
-    SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === "設定" ? settings : sheet }) },
+    SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === "邀約紀錄" ? sheet : null }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     Session: { getActiveUser: () => ({ getEmail: () => "Eric.Jiang@hy-tech.com.tw" }) },
     Sheets: { Spreadsheets: { batchUpdate: request => {
@@ -248,7 +247,13 @@ test("資料接在尚未補號的列之後，原子更新指定欄位並允許�
   assert.equal(requests.length, 1);
   context.Session.getActiveUser = () => ({ getEmail: () => "Tammie.Lin@hy-tech.com.tw" });
   assert.equal(context.getRecruiter_(), "Tammie.L");
-  assert.throws(() => context.submitInvitations(payload), /邀約人「Tammie\.L」尚未加入/);
+  context.Session.getActiveUser = () => ({ getEmail: () => "HRIntern@hy-tech.com.tw" });
+  assert.equal(context.submitInvitations(payload).recruiter, "hrintern");
+  context.Session.getActiveUser = () => ({ getEmail: () => "hr@hy-tech.com.tw" });
+  assert.equal(context.submitInvitations(payload).recruiter, "hr");
+  context.Session.getActiveUser = () => ({ getEmail: () => "hr@hy-tech.com.tw.example.test" });
+  assert.throws(() => context.submitInvitations(payload), /公司 Google 帳號/);
+  assert.equal(requests.length, 3);
   context.Session.getActiveUser = () => ({ getEmail: () => "" });
   assert.throws(() => context.submitInvitations(payload), /未提供目前帳號的電子郵件/);
 });

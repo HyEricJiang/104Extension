@@ -20,8 +20,11 @@ function doGet() {
 function getRecruiter_() {
   const email = String(Session.getActiveUser().getEmail()).trim().toLowerCase();
   if (!email) throw new Error("Google 未提供目前帳號的電子郵件，無法帶入邀約人。請在登錄頁確認選用的 Google 帳號及授權。");
-  const match = email.match(/^([a-z]+)\.([a-z])[a-z]*@[^@\s]+$/);
-  if (!match) throw new Error("目前 Google 帳號的電子郵件無法轉為邀約人名稱。");
+  const company = email.match(/^([^@\s]+)@hy-tech\.com\.tw$/);
+  if (!company) throw new Error("請使用 @hy-tech.com.tw 公司 Google 帳號。");
+  const localPart = company[1];
+  const match = localPart.match(/^([a-z]+)\.([a-z])[a-z]*$/);
+  if (!match) return localPart;
   return match[1][0].toUpperCase() + match[1].slice(1) + "." + match[2].toUpperCase();
 }
 
@@ -46,11 +49,6 @@ function submitInvitations(payload) {
         .findIndex(([note]) => note.split("\n").includes(batchNote));
       if (previous >= 0) return { recruiter, firstRow: previous + 2, count: rows.length };
     }
-
-    const settings = book.getSheetByName("設定");
-    const recruiterAllowed = settings && settings.getRange("L2:L" + settings.getLastRow())
-      .getDisplayValues().some(([name]) => name === recruiter);
-    if (!recruiterAllowed) throw new Error("目前 Google 帳號對應的邀約人「" + recruiter + "」尚未加入「設定」分頁 L 欄。");
 
     const firstRow = findInviteStart_(sheet, last);
     const endRow = firstRow + rows.length - 1;

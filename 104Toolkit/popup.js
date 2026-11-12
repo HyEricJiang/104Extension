@@ -31,6 +31,7 @@ let currentResumeKey = "";
 let reasonWrite = Promise.resolve();
 let reasonVersion = 0;
 let settingsVersion = 0;
+let settingsWrite = Promise.resolve(true);
 
 function updateClassificationAvailability() {
   document.querySelectorAll(".classification-button").forEach(button => {
@@ -257,13 +258,22 @@ async function refreshStates() {
   }
 }
 
+function selectedInvitationSuffix() {
+  return ResumeTrainingLabels.normalizeInvitationSuffix(byId("invitationSuffix").querySelector("input:checked")?.value);
+}
+
 function buildPreviewFilename() {
   const labels = ResumeTrainingLabels;
   const trainingOnly = labels.isTrainingOnlyGroup(currentGroupTitle);
   const annotation = labels.exportAnnotation(currentGroupTitle, { label: currentTrainingLabel });
   const trainingFilename = labels.trainingFilename("王小明", annotation);
+  const mode = selectedInvitationSuffix();
+  const custom = labels.customSuffix(byId("customInvitationSuffix").value);
+  byId("customInvitationSuffixField").hidden = mode !== "other";
   byId("filenamePreview").hidden = trainingOnly;
-  byId("filenamePreview").textContent = trainingOnly ? "" : labels.invitationFilename("王小明", currentGroupTitle, byId("invitationSuffix").value);
+  byId("filenamePreview").textContent = trainingOnly ? "" : mode === "other" && !custom
+    ? "請輸入自訂後綴"
+    : labels.invitationFilename("王小明", currentGroupTitle, mode, custom);
   byId("trainingFilenamePreview").hidden = !trainingFilename;
   byId("trainingFilenamePreview").textContent = trainingFilename || "";
   byId("groupHint").textContent = trainingOnly
@@ -274,33 +284,39 @@ function buildPreviewFilename() {
 async function loadSettings() {
   const { settings = {} } = await chrome.storage.local.get("settings");
   legacySubdir = settings.subdir ?? "104履歷下載區/";
-  const output = await RecruitingOutputDirectory.status();
-  byId("outputLocation").textContent = output.selected ? output.name : (legacySubdir ? `瀏覽器下載位置／${legacySubdir}` : output.name);
   byId("firstWait").value = settings.firstWait ?? 4000;
   byId("nextWait").value = settings.nextWait ?? 800;
-  byId("invitationSuffix").value = ResumeTrainingLabels.normalizeInvitationSuffix(settings.invitationSuffix);
+  const mode = ResumeTrainingLabels.normalizeInvitationSuffix(settings.invitationSuffix);
+  byId("invitationSuffix").querySelector(`input[value="${mode}"]`).checked = true;
+  byId("customInvitationSuffix").value = settings.customInvitationSuffix ?? "";
+  buildPreviewFilename();
+  const output = await RecruitingOutputDirectory.status();
+  byId("outputLocation").textContent = output.selected ? output.name : (legacySubdir ? `瀏覽器下載位置／${legacySubdir}` : output.name);
 }
 
-async function saveSettings() {
+function markSettingsDirty(status = ui.settingsStatus) {
   const version = ++settingsVersion;
-  ui.settingsStatus.textContent = "儲存中…";
+  const showProgress = status === ui.settingsStatus;
+  status.textContent = showProgress ? "儲存中…" : "";
+  status.classList.remove("status-success");
   const settings = {
     subdir: legacySubdir,
     firstWait: Math.max(0, Number(byId("firstWait").value || 0)),
     nextWait: Math.max(0, Number(byId("nextWait").value || 0)),
-    invitationSuffix: ResumeTrainingLabels.normalizeInvitationSuffix(byId("invitationSuffix").value)
+    invitationSuffix: selectedInvitationSuffix(),
+    customInvitationSuffix: byId("customInvitationSuffix").value
   };
-  await chrome.storage.local.set({ settings });
-  await send({ cmd: "applySettings" });
-  if (version !== settingsVersion) return;
-  ui.settingsStatus.textContent = "已自動儲存";
-  ui.settingsStatus.classList.add("status-success");
-}
-
-function markSettingsDirty() {
-  saveSettings().catch(error => {
-    ui.settingsStatus.textContent = `儲存失敗：${errorText(error)}，請重新調整後重試。`;
-    ui.settingsStatus.classList.remove("status-success");
+  settingsWrite = settingsWrite.then(async () => {
+    await chrome.storage.local.set({ settings });
+    await send({ cmd: "applySettings" });
+    if (version === settingsVersion && showProgress) {
+      status.textContent = "已自動儲存";
+      status.classList.add("status-success");
+    }
+    return true;
+  }).catch(error => {
+    if (version === settingsVersion) status.textContent = `儲存失敗：${errorText(error)}，請重新調整後重試。`;
+    return false;
   });
 }
 
@@ -359,6 +375,7 @@ function saveCurrentReason() {
 async function startPdf(cmd) {
   if (!(await ensureReasonSaved())) return;
   try {
+    await ensurePdfSettingsSaved();
     const response = await send({ cmd });
     if (!response?.ok) throw new Error(response?.error || "無法開始匯出。");
     await refreshStates();
@@ -370,12 +387,21 @@ async function startPdf(cmd) {
 async function startInvitation(type) {
   if (!(await ensureReasonSaved())) return;
   try {
+    if (type === "TOOLKIT_START_COMBINED_RIGHT") await ensurePdfSettingsSaved();
     const response = await send({ type });
     if (!response?.ok) throw new Error(response?.error || "無法啟動登錄。");
     await refreshStates();
   } catch (error) {
     ui.workflowMessage.textContent = errorText(error);
   }
+}
+
+async function ensurePdfSettingsSaved() {
+  if (selectedInvitationSuffix() === "other" && !ResumeTrainingLabels.customSuffix(byId("customInvitationSuffix").value)) {
+    byId("customInvitationSuffix").focus();
+    throw new Error("請輸入自訂的 PDF 檔名後綴。");
+  }
+  if (!(await settingsWrite)) throw new Error("PDF 設定尚未儲存，請重新選擇後重試。");
 }
 
 function bindActions() {
@@ -417,15 +443,18 @@ function bindActions() {
   ui.stopPdf.addEventListener("click", () => send({ cmd: "stopBatch" }));
   byId("trainingReason").addEventListener("input", event => { if (!event.isComposing) saveCurrentReason(); });
   byId("trainingReason").addEventListener("compositionend", saveCurrentReason);
-  byId("invitationSuffix").addEventListener("change", () => {
+  const updateSuffix = () => {
     buildPreviewFilename();
-    markSettingsDirty();
-  });
+    markSettingsDirty(byId("invitationSuffixStatus"));
+  };
+  byId("invitationSuffix").addEventListener("change", updateSuffix);
+  byId("customInvitationSuffix").addEventListener("input", event => { if (!event.isComposing) updateSuffix(); });
+  byId("customInvitationSuffix").addEventListener("compositionend", updateSuffix);
   byId("openWriter").addEventListener("click", openWriter);
 
   ["firstWait", "nextWait"].forEach((id) => {
-    byId(id).addEventListener("input", markSettingsDirty);
-    byId(id).addEventListener("change", markSettingsDirty);
+    byId(id).addEventListener("input", () => markSettingsDirty());
+    byId(id).addEventListener("change", () => markSettingsDirty());
   });
 }
 

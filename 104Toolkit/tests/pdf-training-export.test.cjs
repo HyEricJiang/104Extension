@@ -4,8 +4,8 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
 
-function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",groupTitles,selectedDirectory=false,failTraining=false,candidateName="Test",prefixMode="tabGroup",invitationSuffix}={}) {
- const stored={settings:{subdir:'104履歷下載區/',filenamePrefixMode:prefixMode,filenamePrefix:'Manual',filenameSuffix:'104',firstWait:0,nextWait:0,invitationSuffix}};
+function harness({failSecond=false,stopAfterFirst=false,groupTitle="Jr.Java PG",groupTitles,selectedDirectory=false,failTraining=false,candidateName="Test",prefixMode="tabGroup",invitationSuffix,customInvitationSuffix}={}) {
+ const stored={settings:{subdir:'104履歷下載區/',filenamePrefixMode:prefixMode,filenamePrefix:'Manual',filenameSuffix:'104',firstWait:0,nextWait:0,invitationSuffix,customInvitationSuffix}};
  const events=new Set();const downloads=[];let nextTab=100;let printCount=0;
  const noopEvent={addListener(){},removeListener(){}};
  const context=vm.createContext({console,URL,Uint8Array,atob,btoa,
@@ -75,6 +75,12 @@ test('主動投遞後綴只套用一般 PDF',async()=>{
   '104履歷下載區/Jr.Java PG_Test_104主動投遞.pdf',
   '104履歷下載區/AI訓練資料_Test.pdf'
  ]);
+});
+
+test('其他後綴會清理路徑符號，並用於一般 PDF',async()=>{
+ const h=harness({invitationSuffix:'other',customInvitationSuffix:' 校園/徵才 '});
+ await h.context.RecruitingPdfExporter.runDownloadCurrent();
+ assert.deepEqual(h.downloads.map(d=>d.filename),['104履歷下載區/Jr.Java PG_Test_校園_徵才.pdf']);
 });
 
 test('停止後不處理下一位，已開始的有標籤履歷仍完成兩個版本',async()=>{

@@ -11,7 +11,7 @@ function popup(state, save = async () => ({ok: true})) {
   const element = id => {
     if (!elements.has(id)) elements.set(id, {
       id, value: '', textContent: '', options: [{value: ''}], disabled: true,
-      querySelectorAll: () => [], setAttribute() {}, append(option) {this.options.push(option);}
+      querySelector: () => null, querySelectorAll: () => [], setAttribute() {}, append(option) {this.options.push(option);}
     });
     return elements.get(id);
   };
@@ -98,4 +98,39 @@ test('儲存失敗不回報成功，保留文字且修正後可再次儲存', as
   h.context.saveCurrentReason();
   assert.equal(await h.context.ensureReasonSaved(), true);
   assert.equal(h.element('reasonStatus').textContent, '原因已自動儲存');
+});
+
+test('切換後綴後立即點擊匯出，會先保存新的後綴再啟動', async () => {
+  for (const [start, expected] of [
+    [h => h.context.startPdf('downloadCurrent'), 'downloadCurrent'],
+    [h => h.context.startInvitation('TOOLKIT_START_COMBINED_RIGHT'), 'TOOLKIT_START_COMBINED_RIGHT']
+  ]) {
+    const h = popup(current());
+    const commands = [];
+    let finishWrite;
+    const saved = new Promise(resolve => { finishWrite = resolve; });
+    h.context.chrome.storage.local.set = async ({ settings }) => {
+      assert.equal(settings.invitationSuffix, 'other');
+      assert.equal(settings.customInvitationSuffix, '校園徵才');
+      await saved;
+    };
+    h.context.send = async message => {
+      commands.push(message.cmd || message.type);
+      return { ok: true };
+    };
+    h.context.refreshStates = async () => {};
+    h.element('invitationSuffix').querySelector = () => ({value: 'other'});
+    h.element('customInvitationSuffix').value = '校園徵才';
+    h.element('invitationSuffixStatus').classList = { remove() {} };
+    h.context.buildPreviewFilename();
+    assert.equal(h.element('customInvitationSuffixField').hidden, false);
+    assert.equal(h.element('filenamePreview').textContent, '王小明_校園徵才.pdf');
+    h.context.markSettingsDirty(h.element('invitationSuffixStatus'));
+    const started = start(h);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(commands, []);
+    finishWrite();
+    await started;
+    assert.deepEqual(commands, ['applySettings', expected]);
+  }
 });
