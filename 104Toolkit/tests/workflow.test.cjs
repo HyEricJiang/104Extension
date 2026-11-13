@@ -229,7 +229,7 @@ test("不合適批次即使無聯絡資料也匯出訓練 PDF，略過收集及�
 });
 
 
-test("只登錄本頁往右使用批次寫入，並回報 Google 確認的列號", async () => {
+test("登錄本頁往右使用批次寫入，並回報 Google 確認的列號", async () => {
   const h = createHarness({ rows: ["row1", "row2"] });
   await h.dispatch({ type: "TOOLKIT_START_INVITE_RIGHT", originTabId: 42, source: "校園徵才" });
   const state = await waitForWorkflowToSettle(h);
