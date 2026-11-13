@@ -30,7 +30,7 @@ function getRecruiter_() {
 
 function submitInvitations(payload) {
   const recruiter = getRecruiter_();
-  const { batchId, rows } = validateBatch_(payload);
+  const { batchId, rows, source } = validateBatch_(payload);
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
 
@@ -60,9 +60,29 @@ function submitInvitations(payload) {
     if (endRow > gridRows) {
       requests.push({ appendDimension: { sheetId: INVITE_TAB_ID, dimension: "ROWS", length: endRow - gridRows } });
     }
+    if (source !== "104邀約" && inGrid > 0) {
+      const settings = book.getSheetByName("設定");
+      const listed = settings?.getRange("H2:H").getDisplayValues().some(([value]) => value === source);
+      if (!listed) {
+        const range = "'" + INVITE_TAB + "'!C" + firstRow + ":C" + (firstRow + inGrid - 1);
+        const data = Sheets.Spreadsheets.get(INVITE_BOOK, {
+          ranges: [range],
+          fields: "sheets(data(rowData(values(dataValidation))))"
+        }).sheets?.[0]?.data?.[0]?.rowData || [];
+        for (const [index, row] of data.entries()) {
+          const rule = row.values?.[0]?.dataValidation;
+          if (rule?.strict && rule.condition?.type === "ONE_OF_RANGE" &&
+              rule.condition.values?.[0]?.userEnteredValue === "='設定'!$H$2:$H") {
+            requests.push(updateInviteCells_(firstRow + index, 3, [[{
+              dataValidation: { ...rule, strict: false }
+            }]], "dataValidation"));
+          }
+        }
+      }
+    }
     requests.push(
       updateInviteCells_(firstRow, 2, rows.map(row =>
-        [recruiter, "104邀約", INVITE_POSITIONS[row.group]].map(textCell_)
+        [recruiter, source, INVITE_POSITIONS[row.group]].map(textCell_)
       ), "userEnteredValue"),
       updateInviteCells_(firstRow, 2, [[{
         note: [inGrid > 0 ? sheet.getRange(firstRow, 2).getNote() : "", batchNote].filter(Boolean).join("\n")
@@ -83,6 +103,10 @@ function validateBatch_(payload) {
       !Array.isArray(payload.rows) || !payload.rows.length || payload.rows.length > 100) {
     throw new Error("登錄批次資料格式不正確。");
   }
+  const source = payload.source === undefined ? "104邀約" : payload.source;
+  if (typeof source !== "string" || !source.trim() || source.length > 40 || /[\x00-\x1f\x7f]/.test(source)) {
+    throw new Error("請填寫有效的招募管道，最多 40 字。");
+  }
   const seen = new Set();
   const rows = payload.rows.map((row, index) => {
     const group = row?.group;
@@ -97,7 +121,7 @@ function validateBatch_(payload) {
     seen.add(key);
     return row;
   });
-  return { batchId: payload.batchId, rows };
+  return { batchId: payload.batchId, rows, source: source.trim() };
 }
 
 function findInviteStart_(sheet, last) {

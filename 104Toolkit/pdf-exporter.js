@@ -213,7 +213,7 @@ async function runDownloadCurrent() {
   await runIdnoExportJob([item], "下載目前履歷");
 }
 
-async function runDownloadRightBatch(scopeTargets) {
+async function runDownloadRightBatch(scopeTargets, source) {
   const targets = scopeTargets || await globalThis.RecruitingTabScope.capture();
   const items = [];
   const seen = new Set();
@@ -245,10 +245,10 @@ async function runDownloadRightBatch(scopeTargets) {
   }
 
   if (items.length === 0) throw new Error("往右沒有找到可下載的 104 履歷頁。");
-  await runIdnoExportJob(items, `往右批次下載（${items.length} 份）`);
+  await runIdnoExportJob(items, `往右批次下載（${items.length} 份）`, source);
 }
 
-async function runIdnoExportJob(items, jobTitle) {
+async function runIdnoExportJob(items, jobTitle, source) {
   await syncSettingsFromStorage();
   const { invitationSuffix, customInvitationSuffix } = state.settings;
 
@@ -395,7 +395,9 @@ async function runIdnoExportJob(items, jobTitle) {
         throw new Error("無法取得候選人姓名 (履歷畫面可能空白或發生異常)，已自動攔截並取消輸出 PDF。");
       }
       const subdir = normalizeSubdir((state.settings.subdir || "").trim());
-      const invitationFilename = trainingOnly ? "" : labels.invitationFilename(name, group, invitationSuffix, customInvitationSuffix);
+      const invitationFilename = trainingOnly ? "" : source === undefined
+        ? labels.invitationFilename(name, group, invitationSuffix, customInvitationSuffix)
+        : labels.invitationFilename(name, group, "other", source);
       const trainingFilename = labels.trainingFilename(name, annotation);
 
       // 執行列印 (因為 Debugger 已經掛載，直接發送列印指令)

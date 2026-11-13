@@ -13,7 +13,7 @@ function createHarness({ permissionError = false, pdfFailure = false, trainingOn
   const storage = {};
   const listeners = [];
   const calls = [];
-  let collectedScope, exportedScope, submittedRows;
+  let collectedScope, exportedScope, submittedRows, submittedSource, exportedSource;
   const collectorState = { running: false, stopRequested: false, rows };
   const pdfState = { running: false, stopRequested: false, lastMessage: "完成：成功 1/1" };
 
@@ -30,8 +30,9 @@ function createHarness({ permissionError = false, pdfFailure = false, trainingOn
         getSkipped: () => 0,
         getFailures: () => failures
       }),
-      send: async (items) => {
+      send: async (items, _skipped, _windowId, source) => {
         submittedRows = items;
+        submittedSource = source;
         calls.push(["submit"]);
         return { firstRow: 10, count: items.length };
       }
@@ -87,9 +88,10 @@ function createHarness({ permissionError = false, pdfFailure = false, trainingOn
       getState() {
         return { ...pdfState };
       },
-      async runDownloadRightBatch(targets) {
+      async runDownloadRightBatch(targets, source) {
         if (permissionError) throw new Error("資料夾需要授權");
         exportedScope = targets;
+        exportedSource = source;
         calls.push(["export", "right"]);
         if (pdfFailure) { pdfState.exportSummary = { fail: 1 }; pdfState.lastMessage = "部分 PDF 匯出失敗"; }
       },
@@ -112,7 +114,7 @@ function createHarness({ permissionError = false, pdfFailure = false, trainingOn
     });
   }
 
-  return { calls, dispatch, storage, get submittedRows() { return submittedRows; }, get scopes(){return [collectedScope,exportedScope];} };
+  return { calls, dispatch, storage, get submittedRows() { return submittedRows; }, get scopes(){return [collectedScope,exportedScope];}, get sources() { return [submittedSource, exportedSource]; } };
 }
 
 async function waitForWorkflowToSettle(harness) {
@@ -129,7 +131,7 @@ async function waitForWorkflowToSettle(harness) {
 test("整合工作流先確認 Google 寫入列，再於背景匯出 PDF", async () => {
   const rows = ["row1", "row2", "row3", "row4", "row5"];
   const harness = createHarness({ rows });
-  const response = await harness.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT" });
+  const response = await harness.dispatch({ type: "TOOLKIT_START_COMBINED_RIGHT", source: "104主動投遞" });
   assert.equal(response.ok, true);
 
   const state = await waitForWorkflowToSettle(harness);
@@ -137,6 +139,7 @@ test("整合工作流先確認 Google 寫入列，再於背景匯出 PDF", async
   assert.equal(state.savedCount, 5);
   assert.match(state.lastMessage, /第 10–14 列/);
   assert.deepEqual(harness.submittedRows, rows);
+  assert.deepEqual(harness.sources, ["104主動投遞", "104主動投遞"]);
   assert.deepEqual(
     harness.calls.filter(([name]) => ["collect", "activate", "export", "submit"].includes(name)),
     [
@@ -228,10 +231,11 @@ test("不合適批次即使無聯絡資料也匯出訓練 PDF，略過收集及�
 
 test("只登錄本頁往右使用批次寫入，並回報 Google 確認的列號", async () => {
   const h = createHarness({ rows: ["row1", "row2"] });
-  await h.dispatch({ type: "TOOLKIT_START_INVITE_RIGHT", originTabId: 42 });
+  await h.dispatch({ type: "TOOLKIT_START_INVITE_RIGHT", originTabId: 42, source: "校園徵才" });
   const state = await waitForWorkflowToSettle(h);
   assert.equal(state.phase, "done");
   assert.equal(state.savedCount, 2);
+  assert.deepEqual(h.sources, ["校園徵才", undefined]);
   assert.match(state.lastMessage, /第 10–11 列/);
   assert.deepEqual(h.calls.filter(([name]) => ["collect", "activate", "export", "submit"].includes(name)), [
     ["collect"], ["submit"]

@@ -387,8 +387,10 @@ async function startPdf(cmd) {
 async function startInvitation(type) {
   if (!(await ensureReasonSaved())) return;
   try {
-    if (type === "TOOLKIT_START_COMBINED_RIGHT") await ensurePdfSettingsSaved();
-    const response = await send({ type });
+    await ensurePdfSettingsSaved();
+    const mode = selectedInvitationSuffix();
+    const source = mode === "other" ? byId("customInvitationSuffix").value.trim() : mode;
+    const response = await send({ type, source });
     if (!response?.ok) throw new Error(response?.error || "無法啟動登錄。");
     await refreshStates();
   } catch (error) {
@@ -399,7 +401,7 @@ async function startInvitation(type) {
 async function ensurePdfSettingsSaved() {
   if (selectedInvitationSuffix() === "other" && !ResumeTrainingLabels.customSuffix(byId("customInvitationSuffix").value)) {
     byId("customInvitationSuffix").focus();
-    throw new Error("請輸入自訂的 PDF 檔名後綴。");
+    throw new Error("請輸入自訂的招募管道。");
   }
   if (!(await settingsWrite)) throw new Error("PDF 設定尚未儲存，請重新選擇後重試。");
 }

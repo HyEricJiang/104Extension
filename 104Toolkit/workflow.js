@@ -66,7 +66,7 @@
     }
   }
 
-  async function runWorkflow(originTabId, type) {
+  async function runWorkflow(originTabId, type, source) {
     const includePdf = type === "TOOLKIT_START_COMBINED_RIGHT";
     const currentOnly = type === "TOOLKIT_START_INVITE_CURRENT";
     const total = includePdf ? 2 : 1;
@@ -107,7 +107,7 @@
           return;
         }
         try {
-          const result = await writer.send(rows, invitation.getSkipped(), targets[0].windowId);
+          const result = await writer.send(rows, invitation.getSkipped(), targets[0].windowId, source);
           const lastRow = result.firstRow + result.count - 1;
           const range = result.count === 1 ? String(result.firstRow) : `${result.firstRow}–${lastRow}`;
           const skipped = result.skipped ? ` ${result.skipped} 頁無可登錄的職缺群組。` : "";
@@ -126,7 +126,7 @@
       if (includePdf && !state.stopRequested) {
         await persistAndNotify({ phase: "exporting", current: 1, lastMessage: `${registration} 正在匯出 PDF…` });
         try {
-          await globalThis.RecruitingPdfExporter.runDownloadRightBatch(targets);
+          await globalThis.RecruitingPdfExporter.runDownloadRightBatch(targets, source);
           const pdf = globalThis.RecruitingPdfExporter.getState();
           pdfMessage = pdf.lastMessage || "PDF 匯出結束。";
           if (pdf.exportSummary?.fail) pdfError = "部分 PDF 匯出失敗。";
@@ -195,7 +195,7 @@
         const originTabId = message.originTabId || await getActiveTabId();
         if (!originTabId) throw new Error("找不到目前作用中的分頁。");
         sendResponse({ ok: true });
-        await runWorkflow(originTabId, message.type);
+        await runWorkflow(originTabId, message.type, message.source);
       } catch (error) {
         sendResponse({ ok: false, error: String(error?.message || error) });
       } finally {

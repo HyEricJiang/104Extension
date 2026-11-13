@@ -74,7 +74,7 @@
     };
   }
 
-  async function send(rows, skipped, windowId) {
+  async function send(rows, skipped, windowId, source) {
     if (!rows.length) throw new Error("找不到可登錄的姓名及 104 履歷編號。");
     if (rows.length > 100) throw new Error("單次最多登錄 100 筆，請縮小履歷分頁範圍。");
     const tab = await chrome.tabs.create({ windowId, index: 0, url: "about:blank", active: false });
@@ -84,7 +84,7 @@
     try {
       await chrome.storage.session.set({ [key]: {
         expires: Date.now() + WAIT_MS,
-        payload: { batchId, rows, skipped }
+        payload: { batchId, rows, skipped, source }
       } });
       const receipt = new Promise(resolve => {
         const attempt = { resolve, delivered: false };

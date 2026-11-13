@@ -118,7 +118,7 @@ test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => 
     }
   });
   vm.runInContext(frontend, context);
-  const writing = context.RecruitingInvitation.send([{}], 0, 9);
+  const writing = context.RecruitingInvitation.send([{}], 0, 9, "104主動投遞");
   await navigated;
   assert.match(url, /^https:\/\/script\.google\.com\/a\/macros\/hy-tech\.com\.tw\/s\/AK[\w-]+\/exec$/);
   const auth = await new Promise(resolve => {
@@ -139,6 +139,7 @@ test("僅對同一個開啟的 Google 部署頁交付暫存資料", async () => 
   const batch = await send(inheritedFrame);
   assert.deepEqual(plain(await send(sender)), plain(batch));
   assert.equal(batch.rows.length, 1);
+  assert.equal(batch.source, "104主動投遞");
   await send(sender, "TOOLKIT_INVITE_ACK", "wrong-batch", 42);
   assert.equal(closed, undefined);
   await send(sender, "TOOLKIT_INVITE_ACK", batch.batchId, 42);
@@ -206,6 +207,10 @@ test("資料接在尚未補號的列之後，原子更新指定欄位並允許�
   ];
   const notes = new Map([[4, "保留的附註"]]);
   const requests = [];
+  const validation = {
+    condition: { type: "ONE_OF_RANGE", values: [{ userEnteredValue: "='設定'!$H$2:$H" }] },
+    strict: true
+  };
   const sheet = {
     getSheetId: () => 61635491,
     getLastRow: () => 4,
@@ -223,7 +228,10 @@ test("資料接在尚未補號的列之後，原子更新指定欄位並允許�
     SpreadsheetApp: { openById: () => ({ getSheetByName: name => name === "邀約紀錄" ? sheet : null }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     Session: { getActiveUser: () => ({ getEmail: () => "Eric.Jiang@hy-tech.com.tw" }) },
-    Sheets: { Spreadsheets: { batchUpdate: request => {
+    Sheets: { Spreadsheets: { get: (_, query) => {
+      assert.deepEqual(plain(query.ranges), ["'邀約紀錄'!C4:C4"]);
+      return { sheets: [{ data: [{ rowData: [{ values: [{ dataValidation: validation }] }] }] }] };
+    }, batchUpdate: request => {
       requests.push(plain(request.requests));
       const note = request.requests.find(item => item.updateCells?.fields === "note").updateCells;
       notes.set(note.start.rowIndex + 1, note.rows[0].values[0].note);
@@ -248,9 +256,15 @@ test("資料接在尚未補號的列之後，原子更新指定欄位並允許�
   context.Session.getActiveUser = () => ({ getEmail: () => "Tammie.Lin@hy-tech.com.tw" });
   assert.equal(context.getRecruiter_(), "Tammie.L");
   context.Session.getActiveUser = () => ({ getEmail: () => "HRIntern@hy-tech.com.tw" });
-  assert.equal(context.submitInvitations(payload).recruiter, "hrintern");
+  assert.equal(context.submitInvitations({ ...payload, source: "104主動投遞" }).recruiter, "hrintern");
   context.Session.getActiveUser = () => ({ getEmail: () => "hr@hy-tech.com.tw" });
-  assert.equal(context.submitInvitations(payload).recruiter, "hr");
+  assert.equal(context.submitInvitations({ ...payload, source: " 校園徵才 " }).recruiter, "hr");
+  for (const [batch, source] of [[requests[1], "104主動投遞"], [requests[2], "校園徵才"]]) {
+    assert.deepEqual(batch[1].updateCells.rows[0].values[0].dataValidation, { ...validation, strict: false });
+    assert.equal(batch[1].updateCells.start.columnIndex, 2);
+    assert.ok(batch[2].updateCells.rows.every(row => row.values[1].userEnteredValue.stringValue === source));
+  }
+  assert.throws(() => context.submitInvitations({ ...payload, source: " " }), /有效的招募管道/);
   context.Session.getActiveUser = () => ({ getEmail: () => "hr@hy-tech.com.tw.example.test" });
   assert.throws(() => context.submitInvitations(payload), /公司 Google 帳號/);
   assert.equal(requests.length, 3);
